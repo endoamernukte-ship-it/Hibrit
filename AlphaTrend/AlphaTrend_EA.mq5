@@ -2,7 +2,7 @@
 // Mozilla Public License 2.0: https://mozilla.org/MPL/2.0/
 #property copyright "KivancOzbilgic; MT5 adaptation"
 #property link      "https://mozilla.org/MPL/2.0/"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 #include <Trade/Trade.mqh>
 // The calculation is embedded so this EA can be compiled as a single file.
@@ -106,15 +106,27 @@ bool ATCalculate(const MqlRates &rates[], int n, int period, double coeff,
    return true;
 }
 
+input group "1) AlphaTrend ayarlari"
 input double          InpMultiplier=1.0;          // Multiplier
 input int             InpPeriod=14;               // Common Period
 input ENUM_AT_SOURCE  InpSource=AT_CLOSE;         // RSI source (MFI always uses HLC3)
 input bool            InpNoVolumeData=false;      // Change calculation (no volume data)?
 input ENUM_AT_VOLUME  InpVolume=AT_TICK_VOLUME;   // MFI volume source
+input int             InpHistoryBars=20000;       // Hesaplama gecmisi (acik mum dahil)
+
+input group "2) Ters islem"
+input bool            InpReverseTrading=false;     // BUY sinyali SELL, SELL sinyali BUY acar
+
+input group "3) Cikislar (0 = kapali)"
+input int             InpTakeProfitSignalCount=0;  // TP: girisle ayni yonlu uygun sinyal sayisi
+input int             InpStopLossSignalCount=0;    // SL: girisle ters yonlu uygun sinyal sayisi
+input int             InpFixedTakeProfitPoints=0;  // Ekstra sabit TP (point)
+input int             InpFixedStopLossPoints=0;    // Ekstra sabit SL (point)
+
+input group "4) Pozisyon ve emir"
 input double          InpLots=0.01;               // Target position size, lots
 input ulong           InpMagic=20261106;           // Expert magic number
 input ulong           InpDeviation=20;             // Maximum deviation in points
-input int             InpHistoryBars=20000;       // Calculation history including current bar
 
 CTrade trade;
 datetime observed_bar=0;
@@ -132,6 +144,95 @@ bool ValidLots()
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
    if(step<=0 || InpLots<minvol-1e-9 || InpLots>maxvol+1e-9) return false;
    return MathAbs(InpLots/step-MathRound(InpLots/step))<1e-7;
+}
+
+// The extra fixed SL/TP is submitted with the entry order. Distances are
+// measured in MT5 points from the current Ask (buy) or Bid (sell).
+double PriceOnTick(double price, bool round_up)
+{
+   double tick=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tick<=0.0) tick=_Point;
+   double units=price/tick;
+   return NormalizeDouble((round_up ? MathCeil(units-1e-10) : MathFloor(units+1e-10))*tick,_Digits);
+}
+
+bool BuildFixedExits(int direction, double &sl, double &tp)
+{
+   sl=0.0; tp=0.0;
+   if(InpFixedTakeProfitPoints==0 && InpFixedStopLossPoints==0) return true;
+   MqlTick quote;
+   if(!SymbolInfoTick(_Symbol,quote) || quote.bid<=0.0 || quote.ask<=0.0 || quote.ask<quote.bid)
+   {
+      Print("AlphaTrend: SL/TP icin gecerli fiyat alinamadi.");
+      return false;
+   }
+   double entry=(direction>0 ? quote.ask : quote.bid);
+   if(InpFixedTakeProfitPoints>0)
+      tp=PriceOnTick(entry+direction*InpFixedTakeProfitPoints*_Point,direction>0);
+   if(InpFixedStopLossPoints>0)
+      sl=PriceOnTick(entry-direction*InpFixedStopLossPoints*_Point,direction<0);
+   double min_distance=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
+   double close_price=(direction>0 ? quote.bid : quote.ask);
+   if((InpFixedTakeProfitPoints>0 && (tp<=0.0 || direction*(tp-close_price)<min_distance || direction*(tp-close_price)<=0.0)) ||
+      (InpFixedStopLossPoints>0 && (sl<=0.0 || direction*(close_price-sl)<min_distance || direction*(close_price-sl)<=0.0)))
+   {
+      Print("AlphaTrend: sabit SL/TP mesafesi spread veya broker minimumu icin cok yakin; emir gonderilmedi.");
+      return false;
+   }
+   return true;
+}
+
+// Signal-count exits use raw AlphaTrend signal directions, as in the other EA.
+// Only closed bars after position entry are counted, with the closing price
+// strictly beyond the entry price in the profitable/adverse direction.
+void ManageSignalExits(const MqlRates &rates[], int n, const int &buy[], const int &sell[])
+{
+   if(InpTakeProfitSignalCount==0 && InpStopLossSignalCount==0) return;
+   for(int p=PositionsTotal()-1;p>=0;p--)
+   {
+      ulong ticket=PositionGetTicket(p);
+      if(ticket==0 || PositionGetString(POSITION_SYMBOL)!=_Symbol ||
+         (ulong)PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+      int side=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY ? 1 : -1);
+      double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+      datetime opened=(datetime)PositionGetInteger(POSITION_TIME);
+      if(entry<=0.0 || opened==0) continue;
+      // Never silently count only part of a position's history.
+      if(rates[0].time>opened)
+      {
+         PrintFormat("AlphaTrend: ticket=%I64u icin acilistan itibaren yeterli gecmis yok; InpHistoryBars degerini artirin.",ticket);
+         continue;
+      }
+      int tp_count=0, sl_count=0;
+      string reason="";
+      for(int i=0;i<n-1;i++)
+      {
+         // The next bar's actual open time is the close boundary, including gaps.
+         if(rates[i+1].time<=opened) continue;
+         int raw=(buy[i]!=0 ? 1 : (sell[i]!=0 ? -1 : 0));
+         if(raw==0) continue;
+         double change=side*(rates[i].close-entry);
+         if(raw==side && change>0.0) tp_count++;
+         else if(raw==-side && change<0.0) sl_count++;
+         if(InpTakeProfitSignalCount>0 && tp_count>=InpTakeProfitSignalCount) { reason="TP sinyal sayisi"; break; }
+         if(InpStopLossSignalCount>0 && sl_count>=InpStopLossSignalCount) { reason="SL sinyal sayisi"; break; }
+      }
+      if(reason=="") continue;
+      if(!trade.PositionClose(ticket,InpDeviation) || !TradeSucceeded() || PositionSelectByTicket(ticket))
+         PrintFormat("AlphaTrend: %s kapatma basarisiz/eksik; ticket=%I64u retcode=%u %s",reason,ticket,trade.ResultRetcode(),trade.ResultRetcodeDescription());
+      else PrintFormat("AlphaTrend: ticket=%I64u %s ile kapandi (TP=%d, SL=%d).",ticket,reason,tp_count,sl_count);
+   }
+}
+
+bool HasOwnedPosition()
+{
+   for(int i=PositionsTotal()-1;i>=0;i--)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket!=0 && PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         (ulong)PositionGetInteger(POSITION_MAGIC)==InpMagic) return true;
+   }
+   return false;
 }
 
 void ExecuteSignal(int direction)
@@ -171,8 +272,10 @@ void ExecuteSignal(int direction)
       }
    }
    if(same) return;
-   bool sent=(direction>0 ? trade.Buy(InpLots,_Symbol,0,0,0,"AlphaTrend Long")
-                          : trade.Sell(InpLots,_Symbol,0,0,0,"AlphaTrend Short"));
+   double sl=0.0,tp=0.0;
+   if(!BuildFixedExits(direction,sl,tp)) return;
+   bool sent=(direction>0 ? trade.Buy(InpLots,_Symbol,0,sl,tp,"AlphaTrend Long")
+                          : trade.Sell(InpLots,_Symbol,0,sl,tp,"AlphaTrend Short"));
    if(!sent || !TradeSucceeded())
       PrintFormat("AlphaTrend: entry failed, retcode=%u %s",trade.ResultRetcode(),trade.ResultRetcodeDescription());
 }
@@ -180,9 +283,10 @@ void ExecuteSignal(int direction)
 int OnInit()
 {
    if(InpPeriod<1 || InpPeriod>100000 || !MathIsValidNumber(InpMultiplier) ||
-      InpHistoryBars<InpPeriod+4 || !ValidLots())
+      InpHistoryBars<InpPeriod+4 || !ValidLots() || InpTakeProfitSignalCount<0 ||
+      InpStopLossSignalCount<0 || InpFixedTakeProfitPoints<0 || InpFixedStopLossPoints<0)
    {
-      Print("AlphaTrend: invalid period, multiplier, history or broker lot size.");
+      Print("AlphaTrend: gecersiz periyot, gecmis, lot veya cikis ayari.");
       return INIT_PARAMETERS_INCORRECT;
    }
    trade.SetExpertMagicNumber(InpMagic);
@@ -206,6 +310,14 @@ void OnTick()
    if(!ATCalculate(rates,n,InpPeriod,InpMultiplier,InpNoVolumeData,InpSource,InpVolume,alpha,buy,sell)) return;
    observed_bar=current; // one attempt per signal, no retry on rejected orders
    int last=n-2; // most recently closed bar; execute at first available tick of new bar
-   if(buy[last]!=0) ExecuteSignal(1);
-   else if(sell[last]!=0) ExecuteSignal(-1);
+   bool signal_exit_mode=(InpTakeProfitSignalCount>0 || InpStopLossSignalCount>0);
+   if(signal_exit_mode)
+   {
+      ManageSignalExits(rates,n,buy,sell);
+      // Waiting for a count exit replaces Pine's immediate reversal while a
+      // position remains open. This makes counts greater than one meaningful.
+      if(HasOwnedPosition()) return;
+   }
+   int raw=(buy[last]!=0 ? 1 : (sell[last]!=0 ? -1 : 0));
+   if(raw!=0) ExecuteSignal(InpReverseTrading ? -raw : raw);
 }
