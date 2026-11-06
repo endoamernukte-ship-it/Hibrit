@@ -4,7 +4,7 @@
 //| No profitability or stop execution guarantees.                   |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.00"
+#property version   "1.10"
 #property description "Regime-driven market grid, scalp and defensive risk reduction"
 #include <Trade/Trade.mqh>
 
@@ -16,6 +16,11 @@ input int InpEMAPeriod = 50;
 input int InpLookback = 20;
 input int InpConfirmBars = 2;
 input int InpCooldownBars = 3;
+enum LOT_MODE { LOT_RISK_PERCENT, LOT_FIXED };
+input LOT_MODE InpLotMode = LOT_RISK_PERCENT;
+input double InpFixedLot = 0.01; // Exact requested lot; rejected if risk or broker constraints fail
+input bool InpDailyAutoTune = false; // previous completed D1 bar; opt-in
+input int InpDailyBaselineDays = 10; // completed days preceding yesterday
 input double InpRiskPerTradePct = 0.15;
 input double InpMaxOpenRiskPct = 1.0;
 input double InpDailyLossPct = 2.0;
@@ -50,7 +55,10 @@ int hATR=INVALID_HANDLE, hADX=INVALID_HANDLE, hEMA=INVALID_HANDLE;
 Plan current=PLAN_NONE, candidate=PLAN_NONE, target=PLAN_NONE;
 int confirmCount=0, cooldown=0;
 bool transitioning=false, halted=false;
-datetime lastBar=0, lastTrade=0, lastScalpBar=0;
+datetime lastBar=0, lastTrade=0, lastScalpBar=0, tunedDay=0;
+double effectiveGridATR, effectiveStopATR, effectiveTakeATR, effectiveTrailATR;
+double effectiveTrendADX, effectiveTrendEfficiency;
+int effectiveIntervalSec;
 double atr=0, adx=0, ema=0, atrBase=0, efficiency=0, rangeHigh=0, rangeLow=0;
 double lastClose=0, prevClose=0, lastHigh=0, lastLow=0;
 MqlTick tick;
@@ -151,6 +159,54 @@ bool AccountDailyLimit()
    double start=GlobalVariableGet(Key("equity"));
    return start>0 && AccountInfoDouble(ACCOUNT_EQUITY)<=start*(1.0-InpDailyLossPct/100.0);
 }
+void ResetEffectiveSettings()
+{
+   effectiveGridATR=InpGridATR; effectiveStopATR=InpStopATR;
+   effectiveTakeATR=InpTakeATR; effectiveTrailATR=InpTrailATR;
+   effectiveTrendADX=InpTrendADX; effectiveTrendEfficiency=InpTrendEfficiency;
+   effectiveIntervalSec=InpMinTradeIntervalSec;
+}
+// Use broker D1 bars only: index 1 is completed; baseline excludes it.
+// Returns false while history for the current trading day is unavailable.
+bool RefreshDailySettings()
+{
+   if(!InpDailyAutoTune) return true;
+   datetime day=iTime(_Symbol,PERIOD_D1,0);
+   if(day<=0) return false;
+   if(day==tunedDay) return true;
+   MqlRates days[];
+   ArraySetAsSeries(days,true);
+   int count=InpDailyBaselineDays+1;
+   if(CopyRates(_Symbol,PERIOD_D1,1,count,days)!=count) return false;
+   double yesterday=days[0].high-days[0].low, mean=0;
+   if(yesterday<=0 || days[0].time>=day) return false;
+   for(int i=1;i<count;i++)
+   {
+      double span=days[i].high-days[i].low;
+      if(span<=0 || days[i].time>=days[i-1].time) return false;
+      mean+=span;
+   }
+   mean/=InpDailyBaselineDays;
+   if(mean<=0) return false;
+   double ratio=yesterday/mean;
+   // Never tighten stops or grid below user values in low volatility.
+   double scale=MathMax(1.0,MathMin(1.8,ratio));
+   double body=MathAbs(days[0].close-days[0].open)/yesterday;
+   effectiveGridATR=InpGridATR*scale;
+   effectiveStopATR=InpStopATR*scale;
+   effectiveTakeATR=InpTakeATR*scale;
+   effectiveTrailATR=InpTrailATR*scale;
+   effectiveIntervalSec=(int)MathCeil(InpMinTradeIntervalSec*scale);
+   // A directional previous candle moderately raises the evidence threshold;
+   // never lower the user's trend threshold or weaken risk limits.
+   double trendScale=1.0+0.20*MathMax(0.0,MathMin(1.0,body));
+   effectiveTrendADX=MathMin(100.0,InpTrendADX*trendScale);
+   effectiveTrendEfficiency=MathMin(1.0,InpTrendEfficiency*trendScale);
+   tunedDay=day;
+   PrintFormat("Daily tune: completed=%s range/mean=%.3f body=%.3f scale=%.3f grid=%.3f stop=%.3f take=%.3f trail=%.3f interval=%d ADX=%.2f efficiency=%.3f",
+               TimeToString(days[0].time,TIME_DATE),ratio,body,scale,effectiveGridATR,effectiveStopATR,effectiveTakeATR,effectiveTrailATR,effectiveIntervalSec,effectiveTrendADX,effectiveTrendEfficiency);
+   return true;
+}
 bool UpdateIndicators()
 {
    double a[], x[], e[]; MqlRates rates[];
@@ -178,7 +234,7 @@ Plan DetectPlan()
    // Fakeout must breach the preceding range and close back inside it.
    if(InpEnableFakeout && lastHigh>rangeHigh+0.1*atr && lastClose<rangeHigh && lastClose<lastHigh-0.3*atr) return PLAN_FAKE_SHORT;
    if(InpEnableFakeout && lastLow<rangeLow-0.1*atr && lastClose>rangeLow && lastClose>lastLow+0.3*atr) return PLAN_FAKE_LONG;
-   if(adx>=InpTrendADX && efficiency>=InpTrendEfficiency)
+   if(adx>=effectiveTrendADX && efficiency>=effectiveTrendEfficiency)
    {
       if(lastClose>ema && lastClose>prevClose) return PLAN_TREND_LONG;
       if(lastClose<ema && lastClose<prevClose) return PLAN_TREND_SHORT;
@@ -223,7 +279,7 @@ double NormalizePrice(double p)
 bool SendMarket(int dir, double stopDistance, double takeDistance, string label, double riskMultiplier=1.0, double maxVolume=DBL_MAX)
 {
    if(halted || transitioning || current==PLAN_PANIC || !TradingAllowed() || !TickValid() || !SpreadOK()) return false;
-   if(OwnedPositions()>=InpMaxPositions || TimeCurrent()-lastTrade<InpMinTradeIntervalSec) return false;
+   if(OwnedPositions()>=InpMaxPositions || TimeCurrent()-lastTrade<effectiveIntervalSec) return false;
    // In netting mode we cannot safely isolate this EA from other positions.
    if(AccountInfoInteger(ACCOUNT_MARGIN_MODE)!=ACCOUNT_MARGIN_MODE_RETAIL_HEDGING && PositionSelect(_Symbol)) return false;
    ENUM_ORDER_TYPE type=(dir>0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
@@ -240,7 +296,17 @@ bool SendMarket(int dir, double stopDistance, double takeDistance, string label,
    double budget=MathMin(equity*InpRiskPerTradePct/100.0*riskMultiplier, equity*InpMaxOpenRiskPct/100.0-OpenRisk());
    double perLot=-p+InpCostBufferPerLot;
    if(budget<=0 || perLot<=0) return false;
-   double volume=RoundVolumeDown(MathMin(budget/perLot,maxVolume));
+   double volume;
+   if(InpLotMode==LOT_FIXED)
+   {
+      // Fixed means exactly that lot, never silently reduced. All risk budgets,
+      // scalp/fakeout multipliers and the hedge cap remain binding.
+      volume=RoundVolumeDown(InpFixedLot);
+      if(volume<=0 || MathAbs(volume-InpFixedLot)>1e-8 ||
+         volume>maxVolume+1e-8 || volume*perLot>budget+1e-8)
+         return false;
+   }
+   else volume=RoundVolumeDown(MathMin(budget/perLot,maxVolume));
    if(volume<=0) return false;
    double margin=0, free=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    if(!OrderCalcMargin(type,_Symbol,volume,entry,margin) || margin<=0 || free-margin<=0 || (free-margin)/margin*100.0<InpMinFreeMarginPct) return false;
@@ -260,7 +326,7 @@ void TrailPositions()
       if(t==0 || PositionGetString(POSITION_SYMBOL)!=_Symbol || (ulong)PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
       bool buy=PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY;
       double old=PositionGetDouble(POSITION_SL), tp=PositionGetDouble(POSITION_TP), open=PositionGetDouble(POSITION_PRICE_OPEN);
-      double sl=NormalizePrice(buy ? tick.bid-InpTrailATR*atr : tick.ask+InpTrailATR*atr);
+      double sl=NormalizePrice(buy ? tick.bid-effectiveTrailATR*atr : tick.ask+effectiveTrailATR*atr);
       if(buy && sl>open && sl>old+_Point && tick.bid-sl>minDist)
       { if(!trade.PositionModify(t,sl,tp) || !TradeResultOK()) Print("Trail failed ",t," ret=",trade.ResultRetcode()); }
       if(!buy && sl<open && (old==0 || sl<old-_Point) && sl-tick.ask>minDist)
@@ -305,11 +371,11 @@ void RunPlan()
    if(exists)
    {
       // Range adds only on adverse movement; trend adds on favorable pullback.
-      double step=InpGridATR*atr;
+      double step=effectiveGridATR*atr;
       if((dir>0 && tick.ask>last-step) || (dir<0 && tick.bid<last+step)) return;
       if(current==PLAN_FAKE_LONG || current==PLAN_FAKE_SHORT) return;
    }
-   if(SendMarket(dir,InpStopATR*atr,InpTakeATR*atr,label,mult))
+   if(SendMarket(dir,effectiveStopATR*atr,effectiveTakeATR*atr,label,mult))
    {
       if(current==PLAN_FAKE_LONG || current==PLAN_FAKE_SHORT) { current=PLAN_NONE; cooldown=InpCooldownBars; }
       return;
@@ -330,7 +396,7 @@ bool TryDefensiveHedge()
    }
    if(MathAbs(net)<SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN)) return false;
    int dir=(net>0 ? -1 : 1);
-   return SendMarket(dir,InpStopATR*atr,InpTakeATR*atr,"defensive-hedge",1.0,MathAbs(net)*InpHedgeFraction);
+   return SendMarket(dir,effectiveStopATR*atr,effectiveTakeATR*atr,"defensive-hedge",1.0,MathAbs(net)*InpHedgeFraction);
 }
 void RunScalp()
 {
@@ -342,7 +408,7 @@ void RunScalp()
    if(mid>rangeHigh-0.35*width && lastClose<prevClose) dir=-1;
    if(dir==0) return;
    // A scalp is a separate small-risk entry sharing the grid budget.
-   if(SendMarket(dir,InpStopATR*atr,0.6*atr,"scalp",0.5)) lastScalpBar=lastBar;
+   if(SendMarket(dir,effectiveStopATR*atr,0.6*atr,"scalp",0.5)) lastScalpBar=lastBar;
 }
 void Process()
 {
@@ -355,6 +421,7 @@ void Process()
       CancelOwnedOrders(); CloseOwnedPositions(); return;
    }
    if(!TradingAllowed()) return;
+   bool dailyReady=RefreshDailySettings();
    if(transitioning)
    {
       CancelOwnedOrders(); CloseOwnedPositions();
@@ -371,12 +438,15 @@ void Process()
    {
       if(!UpdateIndicators()) return;
       lastBar=bar;
+      // With unavailable D1 history, still process panic using the last valid
+      // settings; block normal rotation until today's settings are ready.
       Plan next=DetectPlan();
       if(next==PLAN_PANIC)
       {
          target=PLAN_PANIC; transitioning=true; candidate=PLAN_NONE; confirmCount=0;
          CancelOwnedOrders(); CloseOwnedPositions(); return;
       }
+      if(!dailyReady) { TrailPositions(); return; }
       if(cooldown>0) cooldown--;
       if(next==candidate) confirmCount++; else { candidate=next; confirmCount=1; }
       if(next!=current && confirmCount>=InpConfirmBars && cooldown==0)
@@ -397,12 +467,19 @@ void Process()
       if(!hedged) { target=PLAN_PANIC; transitioning=true; CloseOwnedPositions(); }
       return;
    }
-   if(current!=PLAN_NONE && current!=PLAN_PANIC) { RunScalp(); RunPlan(); }
+   // Missing daily data must not prevent existing stop management or exits,
+   // but must prevent any ordinary entry with yesterday's stale settings.
+   if(current!=PLAN_NONE && current!=PLAN_PANIC)
+   {
+      if(dailyReady) { RunScalp(); RunPlan(); }
+      else TrailPositions();
+   }
 }
 int OnInit()
 {
-   if(InpATRPeriod<2 || InpADXPeriod<2 || InpEMAPeriod<2 || InpLookback<5 || InpConfirmBars<1 || InpCooldownBars<0 || InpRiskPerTradePct<=0 || InpMaxOpenRiskPct<=0 || InpDailyLossPct<=0 || InpDailyLossPct>=100 || InpBasketLossPct<=0 || InpMaxPositions<1 || InpGridATR<=0 || InpStopATR<=0 || InpTakeATR<=0 || InpTrailATR<=0 || InpMaxSpreadPoints<=0 || InpMaxSpreadATR<=0 || InpMaxTickAgeSec<1 || InpMinTradeIntervalSec<0 || InpCostBufferPerLot<0 || InpHedgeFraction<=0 || InpHedgeFraction>1 || InpHedgeTriggerPct<=0 || InpHedgeTriggerPct>=InpBasketLossPct || InpShockATR<=0 || InpMinFreeMarginPct<0 || InpSlippagePoints<0)
+   if(InpFixedLot<=0 || InpDailyBaselineDays<2 || InpDailyBaselineDays>365 || InpTrendADX<0 || InpTrendADX>100 || InpTrendEfficiency<0 || InpTrendEfficiency>1 || InpATRPeriod<2 || InpADXPeriod<2 || InpEMAPeriod<2 || InpLookback<5 || InpConfirmBars<1 || InpCooldownBars<0 || InpRiskPerTradePct<=0 || InpMaxOpenRiskPct<=0 || InpDailyLossPct<=0 || InpDailyLossPct>=100 || InpBasketLossPct<=0 || InpMaxPositions<1 || InpGridATR<=0 || InpStopATR<=0 || InpTakeATR<=0 || InpTrailATR<=0 || InpMaxSpreadPoints<=0 || InpMaxSpreadATR<=0 || InpMaxTickAgeSec<1 || InpMinTradeIntervalSec<0 || InpCostBufferPerLot<0 || InpHedgeFraction<=0 || InpHedgeFraction>1 || InpHedgeTriggerPct<=0 || InpHedgeTriggerPct>=InpBasketLossPct || InpShockATR<=0 || InpMinFreeMarginPct<0 || InpSlippagePoints<0)
       return INIT_PARAMETERS_INCORRECT;
+   ResetEffectiveSettings();
    prefix=StringFormat("CHM.%I64d.%s.%I64u.",AccountInfoInteger(ACCOUNT_LOGIN),_Symbol,InpMagic);
    hATR=iATR(_Symbol,InpTimeframe,InpATRPeriod); hADX=iADX(_Symbol,InpTimeframe,InpADXPeriod); hEMA=iMA(_Symbol,InpTimeframe,InpEMAPeriod,0,MODE_EMA,PRICE_CLOSE);
    if(hATR==INVALID_HANDLE || hADX==INVALID_HANDLE || hEMA==INVALID_HANDLE) return INIT_FAILED;
