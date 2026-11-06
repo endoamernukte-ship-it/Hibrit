@@ -4,8 +4,8 @@ KivancOzbilgic'in kullanıcı tarafından verilen Pine Script v5 stratejisinin M
 
 ## Kurulum
 
-1. MT5'te **Dosya → Veri Klasörünü Aç** seçeneğine girin. `AlphaTrend` klasörünün tamamını `MQL5/Experts/` içine kopyalayın. Görsel indikatörü kullanacaksanız aynı klasörü ayrıca `MQL5/Indicators/` içine kopyalayın.
-2. MetaEditor'da `Experts/AlphaTrend/AlphaTrend_EA.mq5` ve isteğe bağlı `Indicators/AlphaTrend/AlphaTrend_Indicator.mq5` dosyalarını ayrı ayrı derleyin. `.mqh` dosyası her ikisiyle aynı klasörde kalmalıdır.
+1. MT5'te **Dosya → Veri Klasörünü Aç** seçeneğine girin. Yalnızca `AlphaTrend_EA.mq5` dosyasını `MQL5/Experts/` içine kopyalayın. EA, MT5 ile gelen standart kütüphane dışında başka dosyaya ihtiyaç duymaz.
+2. MetaEditor'da `Experts/AlphaTrend_EA.mq5` dosyasını derleyin. İsteğe bağlı görsel indikatör için `AlphaTrend_Indicator.mq5` ve `AlphaTrendCore.mqh` dosyalarını birlikte `MQL5/Indicators/` içine kopyalayıp indikatörü ayrıca derleyin.
 3. EA'yı istenen sembol ve zaman dilimindeki grafiğe ekleyin, lot miktarını kontrol edin ve algoritmik işlemlere izin verin. Görsel çizim isteniyorsa derlenmiş indikatörü aynı grafiğe ekleyin; indikatörün ayarlarını EA ile eşleştirin. **Show Signals** varsayılan olarak kapalıdır.
 4. Önce Strategy Tester'da ve demo hesapta test edin. EA yalnızca çalışırken yeni mumlarda sinyal değerlendirir; geçmişteki sinyallere geriye dönük işlem açmaz.
 
