@@ -4,7 +4,7 @@
 //| Educational prototype: test on demo; not an HFT or profit guarantee.|
 //+------------------------------------------------------------------+
 #property strict
-#property version "1.00"
+#property version "1.01"
 #include <Trade/Trade.mqh>
 
 CTrade trade;
@@ -61,7 +61,9 @@ input int InpMaxSpreadPoints=30;           // 0 disables spread filter
 input int InpCooldownSeconds=10;
 input double InpMinFreeMarginPercent=200.0; // free margin >= required margin * percent/100
 input double InpAccountLossStopPercent=15.0; // (balance-equity)/balance, account-wide
-input bool InpAllowTrading=false;          // must explicitly enable live orders
+input bool InpAllowTrading=false;          // demo/live: explicit opt-in required
+input bool InpAllowTesterTrading=true;      // Strategy Tester only; independent of live setting
+input bool InpLogDiagnostics=true;          // rate-limited entry-block reasons
 
 struct MarketSnapshot
   {
@@ -88,6 +90,25 @@ datetime g_bar=0, g_last_order=0;
 int g_calm_bars=0;
 bool g_flatten=false, g_stop=false;
 string g_stop_key, g_flat_key;
+
+// Permissions are deliberately independent: enabling the tester never enables live trading.
+bool TradingEnabled()
+  {
+   return MQLInfoInteger(MQL_TESTER) ? InpAllowTesterTrading : InpAllowTrading;
+  }
+
+enum ENUM_DIAG { DIAG_DATA=0, DIAG_PERMISSION, DIAG_STOP, DIAG_DEFENSE,
+                 DIAG_SIGNAL, DIAG_SPREAD, DIAG_VOLUME, DIAG_MARGIN,
+                 DIAG_PENDING, DIAG_COOLDOWN, DIAG_PRICE, DIAG_COUNT };
+datetime g_diag_time[DIAG_COUNT];
+void LogGate(const ENUM_DIAG reason,const string message)
+  {
+   if(!InpLogDiagnostics) return;
+   datetime now=TimeCurrent();
+   if(g_diag_time[reason]!=0 && now>=g_diag_time[reason] && now-g_diag_time[reason]<300) return;
+   g_diag_time[reason]=now;
+   Print("FDE BLOCK: ",message);
+  }
 
 double LinearRegressionEnd(const double &series[], const int end_index, const int period)
   {
@@ -312,25 +333,26 @@ bool ReadSnapshot(MarketSnapshot &s)
    MqlRates rates[];
    ArraySetAsSeries(rates,false);
    int count=CopyRates(_Symbol,g_tf,0,need,rates);
-   if(count<need) return false;
+   if(count<need) { LogGate(DIAG_DATA,StringFormat("History not ready: CopyRates=%d, need=%d.",count,need)); return false; }
    double values[]; ENUM_SQZ_BAR_COLOR colors[]; bool valid[];
-   if(!ComputeMomentum(rates,values,colors,valid)) return false;
+   if(!ComputeMomentum(rates,values,colors,valid)) { LogGate(DIAG_DATA,"Momentum calculation failed."); return false; }
    int i=count-2;
-   if(i<2 || !valid[i] || !valid[i-1] || !valid[i-2]) return false;
+   if(i<2 || !valid[i] || !valid[i-1] || !valid[i-2]) { LogGate(DIAG_DATA,"Not enough valid closed momentum bars."); return false; }
    s.squeeze=ComputeSqueezeState(rates,i);
    s.previous_squeeze=ComputeSqueezeState(rates,i-1);
-   if(s.squeeze==SQZ_STATE_UNKNOWN || s.previous_squeeze==SQZ_STATE_UNKNOWN) return false;
+   if(s.squeeze==SQZ_STATE_UNKNOWN || s.previous_squeeze==SQZ_STATE_UNKNOWN) { LogGate(DIAG_DATA,"Squeeze history not ready."); return false; }
    double baseline[];
    if(!ReadIndicator(g_atr,0,1,s.atr) || !ReadIndicator(g_adx,0,1,s.adx) ||
       !ReadIndicator(g_ema,0,1,s.ema) ||
-      CopyBuffer(g_atr,0,2,InpATRBaselineBars,baseline)!=InpATRBaselineBars) return false;
+      CopyBuffer(g_atr,0,2,InpATRBaselineBars,baseline)!=InpATRBaselineBars)
+     { LogGate(DIAG_DATA,"ATR/ADX/EMA history not ready (CopyBuffer failed)."); return false; }
    double sum=0.0;
    for(int j=0;j<InpATRBaselineBars;j++)
      {
-      if(!MathIsValidNumber(baseline[j]) || baseline[j]<=0 || baseline[j]==EMPTY_VALUE) return false;
+      if(!MathIsValidNumber(baseline[j]) || baseline[j]<=0 || baseline[j]==EMPTY_VALUE) { LogGate(DIAG_DATA,"ATR baseline contains invalid or zero values."); return false; }
       sum+=baseline[j];
      }
-   if(s.atr<=0 || sum<=0) return false;
+   if(s.atr<=0 || sum<=0) { LogGate(DIAG_DATA,"ATR or baseline is zero."); return false; }
    s.atr_ratio=s.atr/(sum/InpATRBaselineBars);
    s.momentum=values[i]; s.previous_momentum=values[i-1];
    s.close=rates[i].close; s.bar_time=rates[i].time;
@@ -450,17 +472,21 @@ bool HasOwnOrders()
 
 bool OpenLayer(const ulong magic,const int side,double lots,const double sl_distance,const double tp_distance,const string label)
   {
-   if(!InpAllowTrading || side==0 || HasOwnOrders() || TimeCurrent()-g_last_order<InpCooldownSeconds) return false;
+   if(!TradingEnabled()) { LogGate(DIAG_PERMISSION,"Trading disabled by EA input for this environment."); return false; }
+   if(side==0) return false;
+   if(HasOwnOrders()) { LogGate(DIAG_PENDING,"An own order is still active."); return false; }
+   if(TimeCurrent()-g_last_order<InpCooldownSeconds) { LogGate(DIAG_COOLDOWN,"Order cooldown active."); return false; }
    MqlTick tick;
-   if(!SymbolInfoTick(_Symbol,tick) || !SpreadOK(tick)) return false;
+   if(!SymbolInfoTick(_Symbol,tick)) { LogGate(DIAG_PRICE,"No current quote."); return false; }
+   if(!SpreadOK(tick)) { LogGate(DIAG_SPREAD,StringFormat("Spread %.1f points; maximum %d (0 disables filter).",(tick.ask-tick.bid)/_Point,InpMaxSpreadPoints)); return false; }
    Exposure e; ReadExposure(e);
    lots=VolumeDown(MathMin(lots,InpMaxGrossLots-e.gross));
-   if(lots<=0) return false;
+   if(lots<=0) { LogGate(DIAG_VOLUME,"Gross lot cap or broker minimum/step prevents order."); return false; }
    ENUM_ORDER_TYPE type=(side>0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
    double entry=(side>0 ? tick.ask : tick.bid), margin=0;
    if(!OrderCalcMargin(type,_Symbol,lots,entry,margin) || margin<=0 ||
       AccountInfoDouble(ACCOUNT_MARGIN_FREE)<margin*InpMinFreeMarginPercent/100.0)
-     { Print("Order skipped: margin calculation or free margin limit."); return false; }
+     { LogGate(DIAG_MARGIN,"Margin calculation failed or free margin below configured minimum."); return false; }
    double stop_level=SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*_Point;
    // Stops are checked from the close-side quote, not entry (spread matters).
    double reference=(side>0 ? tick.bid : tick.ask);
@@ -486,7 +512,7 @@ bool OpenLayer(const ulong magic,const int side,double lots,const double sl_dist
 
 bool CloseTicket(const ulong ticket)
   {
-   if(!InpAllowTrading || !IsOurs(ticket)) return false;
+   if(!TradingEnabled() || !IsOurs(ticket)) return false;
    bool sent=trade.PositionClose(ticket,InpDeviationPoints);
    return RetcodeAccepted(sent);
   }
@@ -505,7 +531,7 @@ void CloseAllOurs()
       ulong ticket=OrderGetTicket(i);
       if(ticket==0 || OrderGetString(ORDER_SYMBOL)!=_Symbol) continue;
       ulong m=(ulong)OrderGetInteger(ORDER_MAGIC);
-      if(InpAllowTrading && (m==InpMagicNumber || m==InpMagicNumber+1 || m==InpMagicNumber+2))
+      if(TradingEnabled() && (m==InpMagicNumber || m==InpMagicNumber+1 || m==InpMagicNumber+2))
          RetcodeAccepted(trade.OrderDelete(ticket));
      }
    // Retry on subsequent ticks on rejection/partial execution; never reopen while flattening.
@@ -578,12 +604,17 @@ void ManageGrid(const bool new_bar)
    if(e.hedges>0 || e.grids>=InpMaxGridPositions ||
       (InpEnableHedge && GridDrawdown(e)>=InpHedgeDrawdownPercent)) return;
    GridPlan p=CalculateDynamicGrid(g_market,e);
-   if(p.frozen || p.step<=0 || p.lot<=0) return;
-   MqlTick tick; if(!SymbolInfoTick(_Symbol,tick) || !SpreadOK(tick)) return;
+   if(p.frozen) { if(new_bar) LogGate(DIAG_DEFENSE,"Defense/unknown regime freezes grid entries."); return; }
+   if(p.step<=0 || p.lot<=0) { if(new_bar) LogGate(DIAG_VOLUME,"Grid step or lot invalid; check broker minimum/step and base lot."); return; }
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol,tick)) { if(new_bar) LogGate(DIAG_PRICE,"No current quote."); return; }
+   if(!SpreadOK(tick))
+     { if(new_bar) LogGate(DIAG_SPREAD,StringFormat("Spread %.1f points; maximum %d (0 disables filter).",(tick.ask-tick.bid)/_Point,InpMaxSpreadPoints)); return; }
    if(e.grids==0)
      {
       // First grid starts only on a new closed bar, no historical entries on startup.
-      if(!new_bar || p.side==0) return;
+      if(!new_bar) return;
+      if(p.side==0) { LogGate(DIAG_SIGNAL,"No grid entry signal on this closed bar."); return; }
      }
    else
      {
@@ -671,8 +702,11 @@ int OnInit()
    if(!trade.SetTypeFillingBySymbol(_Symbol)) { Print("FDE: symbol filling mode unavailable."); return INIT_FAILED; }
    g_bar=iTime(_Symbol,g_tf,0);
    g_market.valid=false;
-   PrintFormat("FDE ready. Trading=%s; stop latch=%s. Use unique magic numbers per instance.",
-               InpAllowTrading ? "ON" : "OFF",g_stop ? "ON" : "OFF");
+   PrintFormat("FDE ready. Environment=%s; trading=%s; stop latch=%s. Use unique magic numbers per instance.",
+               MQLInfoInteger(MQL_TESTER) ? "TESTER" : "DEMO/LIVE",
+               TradingEnabled() ? "ON" : "OFF",g_stop ? "ON" : "OFF");
+   if(!TradingEnabled()) LogGate(DIAG_PERMISSION,"Trading disabled by EA input for this environment.");
+   if(g_stop || g_flatten) LogGate(DIAG_STOP,"Persistent STOP/FLATTEN latch active; see reset procedure in documentation.");
    return INIT_SUCCEEDED;
   }
 
@@ -691,6 +725,7 @@ void OnTick()
      { Print("FDE: account loss circuit breaker latched."); SetFlatten(true); }
    if(g_stop || g_flatten)
      {
+      LogGate(DIAG_STOP,"Persistent STOP/FLATTEN latch active; see reset procedure in documentation.");
       if(g_stop && !g_flatten)
         {
          Exposure stopped; ReadExposure(stopped);
@@ -705,7 +740,7 @@ void OnTick()
      { Print("FDE: basket profit target reached."); SetFlatten(false); CloseAllOurs(); return; }
 
    datetime current=iTime(_Symbol,g_tf,0);
-   if(current<=0) { g_market.valid=false; ManageHedgingAndScalp(false); return; }
+   if(current<=0) { LogGate(DIAG_DATA,"Current bar time not available."); g_market.valid=false; ManageHedgingAndScalp(false); return; }
    bool new_bar=(g_bar>0 && current!=g_bar);
    if(new_bar || !g_market.valid)
      {

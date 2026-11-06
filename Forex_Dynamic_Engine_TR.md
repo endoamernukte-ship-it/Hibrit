@@ -39,7 +39,7 @@ Her tick
 
 ## Risk kontrolleri ve sınırlar
 
-- `InpAllowTrading=false` varsayılanı **tüm gönderme/kapatma/iptal işlemlerini engeller**. Koruma sadece emir izni verilmişse çalışabilir; false, mevcut pozisyonları güvenli biçimde yönetme garantisi değildir.
+- Canlı/demo ortamında `InpAllowTrading=false` varsayılanı **tüm gönderme/kapatma/iptal işlemlerini engeller**. Strategy Tester'da ise bu ayardan bağımsız olan `InpAllowTesterTrading=true` kullanılır. İlgili ortamın izni false ise koruma da emir gönderemez; false, mevcut pozisyonları güvenli biçimde yönetme garantisi değildir. Tester izni canlı/demo iznini açmaz.
 - `InpMaxGridPositions`, `InpMaxScalps`, toplam **brüt** `InpMaxGrossLots` (grid+scalp+hedge), spread, broker lot/tick adımı, broker stop mesafesi, cooldown ve `OrderCalcMargin`/serbest marj kontrolü vardır. Brüt lot limiti hedge için rezerv ayırmaz: limit, minimum lot, spread, marj veya ret hedge'i kısmi ya da imkânsız kılabilir. Kilit garanti değildir. Hedge, scalp lotlarını değil grid net lotunu hedefler; gridin SL'si tetiklenince geçici aşırı hedge oluşabilir. Hedge'e sunucu tarafı SL konmaz; EA/terminal/bağlantı kesilirse veya kotasyon gelmezse açık kalabilir.
 - Grid katmanlarında sunucu tarafı ATR-SL, scalpta ATR-SL/TP bulunur. Sepet hedefi grid+scalp+hedge `POSITION_PROFIT + POSITION_SWAP` toplamıdır; giriş/çıkış komisyonları ve son gerçekleşen kayma dahil değildir. Broker minimum stop mesafesi nedeniyle gerçek SL/TP uzaklığı istenenden büyük olabilir. Stoplar, boşluk veya kaymada fiyat garantisi vermez.
 - Hesap devre kesici formülü **tüm hesap** için `(ACCOUNT_BALANCE - ACCOUNT_EQUITY) / ACCOUNT_BALANCE × 100`; başka EA/manuel işlemler de tetikleyebilir. Tetiklenince yalnızca bu sembol ve üç magic'e ait işlemler kapatılmaya çalışılır; diğer işlemler açık kalır. Bu bir maksimum gerçekleşen kayıp garantisi veya geçmiş tepe özsermaye takibi değildir. Piyasa kapalıyken/bağlantı kesildiğinde çalışmaz.
@@ -54,15 +54,19 @@ Her tick
 | Grid | `InpBaseLot`, `InpGridATR`, `InpDefenseStepFactor`, `InpHunterStepFactor`, `InpRangeMultiplier`, `InpTrendMultiplier`, `InpMaxGridPositions`, `InpMaxGrossLots`, `InpBasketTargetMoney` | Mesafe, pozisyon ve brüt maruziyet sınırları; hedef hesap para birimindedir |
 | Bileşik | `InpCompound`, `InpCompoundReferenceBalance`, `InpMaxCompoundFactor` | Bakiye bazlı, en az 1 ve en fazla belirlenen faktörle sınırlı büyütme; varsayılan kapalı |
 | Kalkan/scalp | `InpEnableHedge`, `InpHedgeDrawdownPercent`, `InpHedgeReleasePercent`, `InpHedgeRatio`, `InpEnableScalp`, `InpScalpLot`, `InpMaxScalps`, `InpScalpSLATR`, `InpScalpTPATR`, `InpGridSLATR` | Hedge tetik/çözme ve broker tarafı fiyat seviyeleri |
-| Güvenlik | `InpMagicNumber`, `InpDeviationPoints`, `InpMaxSpreadPoints`, `InpCooldownSeconds`, `InpMinFreeMarginPercent`, `InpAccountLossStopPercent`, `InpAllowTrading` | Emir ve kalıcı devre kesici sınırları |
+| Güvenlik | `InpMagicNumber`, `InpDeviationPoints`, `InpMaxSpreadPoints`, `InpCooldownSeconds`, `InpMinFreeMarginPercent`, `InpAccountLossStopPercent`, `InpAllowTrading`, `InpAllowTesterTrading`, `InpLogDiagnostics` | Emir izinleri, tanı günlüğü ve kalıcı devre kesici sınırları |
 
 Varsayılan sayılar örnektir, yatırım tavsiyesi veya optimize edilmiş değer değildir. Spread point cinsindendir; 0 filtreyi kapatır. `InpMinFreeMarginPercent=200` için serbest marj, yeni emrin hesaplanan marjının en az iki katı olmalıdır; bu hesap gelecekteki marjı veya stop-out'u garanti etmez.
 
 ## Kurulum ve doğrulama planı
 
 1. `.mq5` dosyasını `MQL5/Experts` altına kopyalayın, MetaEditor'da derleyin ve tüm derleyici mesajlarını kontrol edin. MT5'te ayrı pozisyonlara izin veren hedging demo hesabı seçin. Algo Trading izinlerini ve sembol işlem koşullarını kontrol edin.
-2. Strategy Tester'da `InpAllowTrading=true` ile gerçek tick, gerçekçi spread/komisyon/swap, gecikme ve farklı piyasa rejimleri kullanın; farklı dönemler ve örneklem dışı verilerde ölçün. Her testin terminal global STOP/FLATTEN durumunu kontrol edin.
+2. Güncel dosyayı derleyip Tester'da yeni EX5 dosyasının seçili olduğundan emin olun. Varsayılan `InpAllowTesterTrading=true` ile gerçek tick, gerçekçi spread/komisyon/swap, gecikme ve farklı piyasa rejimleri kullanın; farklı dönemler ve örneklem dışı verilerde ölçün. Canlı/demo izni `InpAllowTrading` ayrı kalır. Her testin STOP/FLATTEN durumunu kontrol edin; Tester'ın global değişken ortamı gerçek terminalden ayrıdır.
 3. Özellikle sınayın: squeeze ON→OFF ve fakeout; eksik geçmiş/gösterge verisi; grid yön değişiminde freeze; azami lot/adım; spread/marj reddi; kısmi dolum; hedge açılamaması; grid SL sonrası fazla/yetim hedge; hedge çözme teyidi; basket TP ve tüm katmanların kapanması; hesap DD stopu; restart ve kalıcı kilit; false→true izin değişimi; broker kapalı ve bağlantı kaybı. Netting hesapta başlatma başarısız olmalıdır.
 4. Demo ileriye dönük testlerde broker journal ve tüm açık emirleri izleyin. Herhangi bir gerçek para kullanımı öncesi bağımsız MQL5 derlemesi, test ve risk kontrolü zorunludur.
 
-Bu depoda `python3 -m unittest discover -s tests -v` yalnızca Squeeze çekirdeğinin değişmediğini ve birkaç statik yapı kontrolünü sınar; MQL derlemesi, emir simülasyonu veya işlem stratejisi doğrulaması değildir.
+### Hiç işlem açılmazsa
+
+Tester Journal/Experts günlüğünde ilk olarak `FDE ready. Environment=TESTER; trading=ON` satırını arayın. `InpLogDiagnostics=true` iken `FDE BLOCK:` satırları veri yetersizliği, izin, kalıcı STOP/FLATTEN, defence/unknown rejim, sinyal yokluğu, spread, lot/limit, marj, bekleyen emir veya cooldown gibi nedenleri gösterir. Mesajlar aynı neden için en fazla beş dakikada bir yazdırılır. Broker reddi `Trade rejected` ve retcode ile kayıt edilir. Her kapanmış mumdaki `FDE bar=` satırı da rejimi ve sinyali gösterir. Bu göstergeler aktif olsa bile sinyal koşulları seçilen ayda hiç gerçekleşmeyebilir; işlem garantisi yoktur. Hedging hesabı şarttır; netting ise EA OnInit'te hata verir. Eski tester presetindeki ayarları ve sembolün minimum lotunu kontrol edin; spread limiti point cinsindendir.
+
+Bu depoda `python3 -m unittest discover -s tests -v` Squeeze çekirdeğinin değişmediğini ve statik yapıyı kontrol eder; ayrıca izin fonksiyonunun aynısını C++ test koşumunda sekiz izin kombinasyonuyla sınar. Bu, MQL derlemesi, MT5 emir simülasyonu veya işlem stratejisi doğrulaması değildir.
