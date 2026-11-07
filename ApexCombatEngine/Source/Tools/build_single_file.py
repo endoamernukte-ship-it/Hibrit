@@ -185,11 +185,34 @@ def main():
     if stack:
         problems.append("kapatilmamis %d parantez" % len(stack))
 
+    # ---- Proje ici TANIMSIZ tanimlayici avi (undeclared identifier) ----
+    # 'chk' = yorum/string temizlenmis kaynak (yukarida hesaplandi).
+    nc = chk
+
+    # Daha once APX_SQZ_ON -> APX_SQZST_ON donusumunde bir kullanim gozden
+    # kacmis ve derleyici "undeclared identifier" vermisti. Bir daha olmasin.
+    PREFIX = (r'APX_', r'APEX_', r'E_APEX_', r'REGIME_', r'GRID_', r'POSTURE_',
+              r'ROLE_', r'PERSIST_', r'VOLBAND_', r'VP_', r'LEG_', r'TIER_', r'SQZ_')
+    decl = set()
+    for mm in re.finditer(r'enum\s+(\w+)\s*\{([^}]*)\}', nc):
+        decl.add(mm.group(1))
+        for line in mm.group(2).split(','):
+            nm = re.match(r'\s*(\w+)', line)
+            if nm: decl.add(nm.group(1))
+    decl |= set(re.findall(r'#define\s+(\w+)', nc))
+    decl |= set(re.findall(r'^\s*(?:const\s+)?(?:input\s+)?\w+\s+(\w+)\s*(?:\[[^]]*\])?\s*[=;]', nc, re.M))
+    decl |= set(re.findall(r'\b(?:void|bool|int|double|string|ulong|long|uint|datetime|float|char|short|uchar)\s+(\w+)\s*\(', nc))
+    decl |= set(re.findall(r'^(?:class|struct)\s+(\w+)', nc, re.M))
+    used = set()
+    for px in PREFIX:
+        used |= set(re.findall(r'\b' + px + r'[A-Z0-9_]*\b', nc))
+    # struct/class uyeleri (kucuk harfli) da tanimlidir
+    undeclared = sorted(u for u in used if u not in decl)
+    if undeclared:
+        problems.append("TANIMSIZ proje tanimlayicilari: %s" % ", ".join(undeclared))
+
     # MQL5'te enum uyeleri GLOBAL isim uzayinda yasar: ayni isim iki farkli
     # enumda gecerse "identifier already used" hatasi verir.
-    nc = re.sub(r'//[^\n]*', '', out)
-    nc = re.sub(r'/\*.*?\*/', '', nc, flags=re.S)
-    nc = re.sub(r'"(\\.|[^"\\])*"', '""', nc)
     enum_members = {}
     for m in re.finditer(r'enum\s+(\w+)\s*\{([^}]*)\}', nc):
         for line in m.group(2).split(','):

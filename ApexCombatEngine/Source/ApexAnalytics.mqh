@@ -386,7 +386,7 @@ private:
         {
          int cur = g_sqz_main.Sqz(i);
          int prv = g_sqz_main.Sqz(i - 1);
-         if(cur != (int)APX_SQZ_ON && prv == (int)APX_SQZST_ON)
+         if(cur != (int)APX_SQZST_ON && prv == (int)APX_SQZST_ON)
            {
             s.bars_since_release = last - i;
             // Salinim anindaki momentum yonu
