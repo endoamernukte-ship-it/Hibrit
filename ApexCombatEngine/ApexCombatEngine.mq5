@@ -31,13 +31,13 @@
 #property strict
 #property description "Squeeze Momentum [LazyBear] cekirdekli hibrit algoritmik savas makinesi"
 
-#include "Include/ApexTypes.mqh"
-#include "Include/ApexTrade.mqh"
-#include "Include/ApexSqueezeCore.mqh"
-#include "Include/ApexAnalytics.mqh"
-#include "Include/ApexRisk.mqh"
-#include "Include/ApexGrid.mqh"
-#include "Include/ApexScalp.mqh"
+#include "ApexTypes.mqh"
+#include "ApexTrade.mqh"
+#include "ApexSqueezeCore.mqh"
+#include "ApexAnalytics.mqh"
+#include "ApexRisk.mqh"
+#include "ApexGrid.mqh"
+#include "ApexScalp.mqh"
 
 //+------------------------------------------------------------------+
 //| 0) TEMEL / OPERASYON                                              |
@@ -458,7 +458,9 @@ void ManageCoreSignalExits()
    g_exec.RebuildBook();
    for(int i = 0; i < g_exec.BookSize(); i++)
      {
-      SBookEntry e = g_exec.BookAt(i);
+      SBookEntry e;
+      if(!g_exec.BookAt(i, e))
+         continue;
       if(e.role != (int)ROLE_CORE)
          continue;
       string reason = "";
@@ -495,7 +497,9 @@ void ManageSmartExitMatrix(SRegimeSnapshot &s)
 
    for(int i = 0; i < g_exec.BookSize(); i++)
      {
-      SBookEntry e = g_exec.BookAt(i);
+      SBookEntry e;
+      if(!g_exec.BookAt(i, e))
+         continue;
       if(e.role != (int)ROLE_CORE)
          continue;
 

@@ -288,7 +288,9 @@ private:
       int p_cnt = 0;
       for(int i = 0; i < g_exec.BookSize(); i++)
         {
-         SBookEntry e = g_exec.BookAt(i);
+         SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
          if(e.role != (int)ROLE_GRID)
             continue;
          int c = p_cnt;
@@ -456,7 +458,9 @@ private:
         {
          for(int i = 0; i < g_exec.BookSize(); i++)
            {
-            SBookEntry e = g_exec.BookAt(i);
+            SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
             if(e.role != (int)ROLE_GRID)
                continue;
             if(e.side == dir)
@@ -525,7 +529,9 @@ private:
          int closed = 0;
          for(int i = 0; i < g_exec.BookSize(); i++)
            {
-            SBookEntry e = g_exec.BookAt(i);
+            SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
             if(e.role != (int)ROLE_GRID)
                continue;
             if(e.profit > 0.0)
@@ -556,7 +562,9 @@ private:
          double trail = s.atr * 1.2;
          for(int i = 0; i < g_exec.BookSize(); i++)
            {
-            SBookEntry e = g_exec.BookAt(i);
+            SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
             if(e.role != (int)ROLE_GRID || e.side != m_trend_dir)
                continue;
             double new_sl = g_exec.NormPrice(price - e.side * trail, -e.side);
@@ -579,7 +587,9 @@ private:
       int cnt = 0;
       for(int i = 0; i < g_exec.BookSize(); i++)
         {
-         SBookEntry e = g_exec.BookAt(i);
+         SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
          if(e.role != (int)ROLE_GRID)
             continue;
          int c = cnt;

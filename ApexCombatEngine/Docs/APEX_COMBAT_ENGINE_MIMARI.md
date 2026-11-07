@@ -513,12 +513,21 @@ belirsiz ise o kadar çabuk kâr realize edilir.**
 
 ## 6. Kurulum ve Çalıştırma
 
-1. `ApexCombatEngine` klasörünü `MQL5/Experts/` altına kopyalayın
-   (`ApexCombatEngine.mq5` + `Include/` altındaki 7 `.mqh` dosyası aynı hiyerarşide kalmalıdır).
-2. MetaEditor'da derleyin (MQL5, `#include "Include/ApexTypes.mqh"` göreli yolunu destekler).
-3. **Hedging** hesaba, grafikte `InpTimeframe` ile aynı sembole ekleyin.
-4. İlk çalıştırmada `InpBootBars` (vars. 40 bar) boyunca sistem ısınır, grid/agresif mod kapalıdır.
-5. Önce **Strategy Tester**'da (her tick, gerçek tick) en az 6 ay–1 yıl doğrulayın,
+1. `ApexCombatEngine` klasörünü **olduğu gibi** `MQL5/Experts/` altına kopyalayın.
+   Kritik kural: `ApexCombatEngine.mq5` ve 7 adet `.mqh` dosyası **aynı (düz) klasörde**
+   durmalıdır.
+   > **Neden:** MetaEditor, tırnaklı `#include "..."` yönergesinde **alt klasörlü göreli
+   > yolu** (`#include "Include/ApexTypes.mqh"` gibi) güvenilir biçimde çözmez; `Experts\`
+   > altında arayıp `file not found` verir. Bu yüzden tüm modüller tek düz klasörde
+   > tutulur ve include'lar dosya adıyla yapılır (`#include "ApexTypes.mqh"`).
+2. Alternatif yerleşim: `.mq5` dosyasını `MQL5/Experts/` içine, 7 `.mqh` dosyasını
+   `MQL5/Include/` içine atabilirsiniz. MQL5 tırnaklı include'da önce kaynak klasöre,
+   bulamazsa `MQL5/Include`'a bakar.
+3. MetaEditor'da **Derle** (F7). `1 errors, 0 warnings` yerine `0 errors, 0 warnings`
+   görmelisiniz.
+4. **Hedging** hesaba, grafikte `InpTimeframe` ile aynı sembole ekleyin.
+5. İlk çalıştırmada `InpBootBars` (vars. 40 bar) boyunca sistem ısınır, grid/agresif mod kapalıdır.
+6. Önce **Strategy Tester**'da (her tick, gerçek tick) en az 6 ay–1 yıl doğrulayın,
    ardından `InpMaxTotalLots`, `InpDDDefense`, `InpGridStepATRMult`, `InpGridBasketATR`
    üzerinden optimizasyon yapın. `OnTester` fitness'ı kârı **DD ve Sharpe'a göre cezalandırır**.
 
@@ -554,16 +563,19 @@ belirsiz ise o kadar çabuk kâr realize edilir.**
 ## 8. Dosya Haritası
 
 ```
-ApexCombatEngine/
-├── ApexCombatEngine.mq5              (914 satır)  ana EA + orkestrasyon
-├── Include/
-│   ├── ApexTypes.mqh                 (529 satır)  katman 0: tipler/yardımcılar
-│   ├── ApexTrade.mqh                 (604 satır)  katman 1: yürütme + defter
-│   ├── ApexSqueezeCore.mqh           (382 satır)  katman 1: LazyBear çekirdeği
-│   ├── ApexAnalytics.mqh             (709 satır)  katman 2: 5 boyutlu rejim
-│   ├── ApexRisk.mqh                  (403 satır)  katman 2: güvenlik duvarı
-│   ├── ApexGrid.mqh                  (742 satır)  katman 3: elastik grid
-│   └── ApexScalp.mqh                 (527 satır)  katman 3: scalp + kalkan
+ApexCombatEngine/                      <- MQL5/Experts/ altına OLDUĞU GİBİ kopyalanır
+├── ApexCombatEngine.mq5              (922)  ana EA + orkestrasyon
+├── ApexTypes.mqh                     (527)  katman 0: tipler/yardımcılar
+├── ApexTrade.mqh                     (609)  katman 1: yürütme + defter
+├── ApexSqueezeCore.mqh               (398)  katman 1: LazyBear çekirdeği
+├── ApexAnalytics.mqh                 (716)  katman 2: 5 boyutlu rejim
+├── ApexRisk.mqh                      (428)  katman 2: güvenlik duvarı
+├── ApexGrid.mqh                      (760)  katman 3: elastik grid
+├── ApexScalp.mqh                     (546)  katman 3: scalp + kalkan
 └── Docs/
     └── APEX_COMBAT_ENGINE_MIMARI.md  bu doküman
 ```
+
+> **Tüm dosyalar tek düz klasördedir.** Alt klasörlü göreli include
+> (`#include "Include/ApexX.mqh"`) MetaEditor'da `file not found` üretir;
+> bu yüzden her include yalnızca dosya adıyla yapılır.

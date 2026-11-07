@@ -428,7 +428,6 @@ public:
          e.profit  = PositionGetDouble(POSITION_PROFIT);
          e.swap    = PositionGetDouble(POSITION_SWAP);
          e.time    = (datetime)PositionGetInteger(POSITION_TIME);
-         e.tag     = comment;
 
          int n = ArraySize(m_book);
          ArrayResize(m_book, n + 1);
@@ -438,7 +437,17 @@ public:
      }
 
    int      BookSize()          { return ArraySize(m_book); }
-   SBookEntry BookAt(const int i) { return m_book[i]; }
+
+   // Defter kaydi referans ile dondurulur: MQL5'te string/dinamik dizi
+   // iceren yapisalarin deger ile kopyalanmasi derleyiciye bagli olarak
+   // kisitlanabildigi icin her yer referans kullanir.
+   bool     BookAt(const int i, SBookEntry &e)
+     {
+      if(i < 0 || i >= ArraySize(m_book))
+         return false;
+      e = m_book[i];
+      return true;
+     }
 
    int CountPos(const int role_filter, const int side_filter)
      {

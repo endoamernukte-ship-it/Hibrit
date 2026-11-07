@@ -107,7 +107,9 @@ private:
       SScalpTrack keep[];
       for(int i = 0; i < g_exec.BookSize(); i++)
         {
-         SBookEntry e = g_exec.BookAt(i);
+         SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
          if(e.role != (int)ROLE_SCALP)
             continue;
          SScalpTrack t;
@@ -311,7 +313,9 @@ private:
       double net = 0.0;
       for(int i = 0; i < g_exec.BookSize(); i++)
         {
-         SBookEntry e = g_exec.BookAt(i);
+         SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
          if(e.role == (int)ROLE_HEDGE)
             continue;
          net += e.side * e.lot;
@@ -386,7 +390,9 @@ private:
       int cnt = 0;
       for(int i = 0; i < g_exec.BookSize(); i++)
         {
-         SBookEntry e = g_exec.BookAt(i);
+         SBookEntry e;
+         if(!g_exec.BookAt(i, e))
+            continue;
          if(e.role == (int)ROLE_HEDGE)
             continue;
          int c = cnt;

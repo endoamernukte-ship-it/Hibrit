@@ -309,7 +309,6 @@ struct SBookEntry
    double   profit;
    double   swap;
    datetime time;
-   string   tag;
   };
 
 //+------------------------------------------------------------------+
