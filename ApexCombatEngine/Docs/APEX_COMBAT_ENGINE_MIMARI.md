@@ -515,6 +515,18 @@ belirsiz ise o kadar çabuk kâr realize edilir.**
 
 ### 6.1 ÖNERİLEN — Tek dosya sürümü (dosya-yolu derleme hatası vermez)
 
+> #### ÖNCE TEMİZLİK (zorunlu)
+> `MQL5\Experts\` klasöründeki şu dosyaların **hepsini silin**:
+> * `ApexCombatEngine.mq5`, `ApexCombatEngine (1).mq5`, `(2)`, `(3)` … (eski kopyalar)
+> * `ApexTypes.mqh`, `ApexTrade.mqh`, `ApexSqueezeCore.mqh`, `ApexAnalytics.mqh`,
+>   `ApexRisk.mqh`, `ApexGrid.mqh`, `ApexScalp.mqh` (modüler kaynak parçaları)
+>
+> Bunlar **modüler sürüme** aittir; yanlarında tüm `.mqh` dosyaları olmadan
+> derlenmez ve `file 'Experts\ApexTypes.mqh' not found` hatası verir.
+> Windows aynı dosyayı tekrar indirdiğinizde `(1)`, `(2)`, `(3)` ekler —
+> MetaEditor açık olan **eski** kopyayı derlemeye devam eder, bu yüzden
+> doğru dosyayı düzenlediğinizi sandığınız halde hata alırsınız.
+
 1. **`ApexCombatEngine_SingleFile.mq5`** dosyasını `MQL5/Experts/` içine kopyalayın.
    **Başka hiçbir dosya gerekmez:** 7 modül bu dosyanın içine gömülüdür; tek dış
    bağımlılık standart kütüphane olan `#include <Trade/Trade.mqh>`'dir.
@@ -581,21 +593,28 @@ belirsiz ise o kadar çabuk kâr realize edilir.**
 
 ```
 ApexCombatEngine/
-├── ApexCombatEngine_SingleFile.mq5   (4925) *** DERLEMEYE HAZIR TEK DOSYA ***
-│                                            MQL5/Experts/ içine atılır, F7
-├── ApexCombatEngine.mq5              (928)  ana EA + orkestrasyon (modüler kaynak)
-├── ApexTypes.mqh                     (527)  katman 0: tipler/yardımcılar
-├── ApexTrade.mqh                     (609)  katman 1: yürütme + defter
-├── ApexSqueezeCore.mqh               (398)  katman 1: LazyBear çekirdeği
-├── ApexAnalytics.mqh                 (716)  katman 2: 5 boyutlu rejim
-├── ApexRisk.mqh                      (428)  katman 2: güvenlik duvarı
-├── ApexGrid.mqh                      (760)  katman 3: elastik grid
-├── ApexScalp.mqh                     (546)  katman 3: scalp + kalkan
-├── Tools/
-│   └── build_single_file.py          modülleri tek dosyaya gömen derleme betiği
-└── Docs/
-    └── APEX_COMBAT_ENGINE_MIMARI.md  bu doküman
+├── ApexCombatEngine_SingleFile.mq5  (4942)  *** DERLENECEK TEK DOSYA ***
+│                                            MQL5/Experts/ içine atılır, F7.
+│                                            Başka HİÇBİR dosya gerekmez.
+├── Docs/
+│   └── APEX_COMBAT_ENGINE_MIMARI.md         bu doküman
+└── Source/                                  (GELİŞTİRME KAYNAĞI - DERLENMEZ)
+    ├── ApexCombatEngine.mq5                 ana EA (modüler)
+    ├── ApexTypes.mqh                        katman 0: tipler/yardımcılar
+    ├── ApexTrade.mqh                        katman 1: yürütme + defter
+    ├── ApexSqueezeCore.mqh                  katman 1: LazyBear çekirdeği
+    ├── ApexAnalytics.mqh                    katman 2: 5 boyutlu rejim
+    ├── ApexRisk.mqh                         katman 2: güvenlik duvarı
+    ├── ApexGrid.mqh                         katman 3: elastik grid
+    ├── ApexScalp.mqh                        katman 3: scalp + kalkan
+    └── Tools/build_single_file.py           tek dosyayı üreten betik
 ```
+
+> **Neden tek dosya?** MetaEditor tırnaklı `#include "..."` yönergesinde dosyayı
+> **yalnızca derlenen .mq5'in klasöründe** arar. `Source/` içindeki modüler
+> sürüm bu yüzden yalnızca geliştirme içindir; dağıtılan/derlenen sürüm
+> `ApexCombatEngine_SingleFile.mq5`'tir. Klasörde tek bir `.mq5` bırakılarak
+> "yanlış dosyayı derleme" ihtimali tamamen ortadan kaldırılmıştır.
 
 > **Tüm dosyalar tek düz klasördedir.** Alt klasörlü göreli include
 > (`#include "Include/ApexX.mqh"`) MetaEditor'da `file not found` üretir;

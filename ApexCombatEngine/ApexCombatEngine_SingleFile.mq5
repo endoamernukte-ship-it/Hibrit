@@ -1,3 +1,26 @@
+//==============================================================================
+//|
+//|  ***  DERLENECEK TEK DOSYA BUDUR  ***
+//|
+//|  Bu dosya KENDI KENDINE YETERLIDIR: hicbir .mqh dosyasina ihtiyac
+//|  duymaz (7 modul icine gomuludur). Tek dis bagimlilik standart
+//|  kutuphane olan  #include <Trade/Trade.mqh>  dir.
+//|
+//|  ONEMLI: MQL5\Experts klasorunde ApexCombatEngine.mq5,
+//|  ApexCombatEngine (1).mq5, (2), (3) ... gibi ESKI KOPYALAR ile
+//|  ApexTypes.mqh / ApexTrade.mqh / ... gibi .mqh dosyalari varsa
+//|  SILIN. Onlar moduler kaynak surumudur ve yanlarinda .mqh
+//|  dosyalari olmadan DERLENMEZ ('file not found' hatasi verir).
+//|
+//|  Kaynak: Source/ klasorundedir (gelistirme icin).
+//|  Bu dosyayi duzenlemeyin; Source icindeki modulleri degistirip
+//|  `python3 Source/Tools/build_single_file.py` ile yeniden uretin.
+//|
+//==============================================================================
+
+//------------------------------------------------------------------------------
+//  Asagidaki kisim Source/ApexCombatEngine.mq5 basligidir.
+//------------------------------------------------------------------------------
 //+------------------------------------------------------------------+
 //|                                            ApexCombatEngine.mq5   |
 //|           APEX COMBAT ENGINE - Hibrit Algoritmik Savas Makinesi   |
@@ -133,12 +156,6 @@ input int    InpSessionEndHour     = 20;    // Bitis saati (sunucu)
 input int    InpFridayCloseHour    = 19;    // Cuma kapanis saati
 input int    InpTickThrottleMs     = 250;   // Tick motoru ertelemesi (ms)
 input int    InpReconcileSec       = 20;    // Defter mutabakat araligi (sn)
-
-//------------------------------------------------------------------------------
-//|  TEK DOSYA SURUM - otomatik uretildi (Tools/build_single_file.py)
-//|  Kaynak: ApexCombatEngine.mq5 + 7 modul (moduler kaynak)
-//|  BU DOSYAYI DUZENLEMEYIN; modulleri duzenleyip yeniden uretin.
-//------------------------------------------------------------------------------
 
 //==============================================================================
 //| MODUL: ApexTypes.mqh

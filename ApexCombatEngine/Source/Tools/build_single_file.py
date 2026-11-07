@@ -23,11 +23,12 @@ import os
 import re
 import sys
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-os.chdir(HERE)
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # .../ApexCombatEngine
+SRC = os.path.join(ROOT, "Source")
+os.chdir(SRC)
 
 MAIN = "ApexCombatEngine.mq5"
-OUT = "ApexCombatEngine_SingleFile.mq5"
+OUT = os.path.join(ROOT, "ApexCombatEngine_SingleFile.mq5")
 
 # Bagimlilik sirasi: her modul yalnizca kendisinden oncekileri kullanir
 MODULES = [
@@ -98,17 +99,34 @@ def main():
     main_text = read(MAIN)
     head, body = split_main(main_text)
 
-    parts = [head, ""]
     banner_lines = [
-        "TEK DOSYA SURUM - otomatik uretildi (Tools/build_single_file.py)",
-        "Kaynak: ApexCombatEngine.mq5 + 7 modul (moduler kaynak)",
-        "BU DOSYAYI DUZENLEMEYIN; modulleri duzenleyip yeniden uretin.",
+        "",
+        "  ***  DERLENECEK TEK DOSYA BUDUR  ***",
+        "",
+        "  Bu dosya KENDI KENDINE YETERLIDIR: hicbir .mqh dosyasina ihtiyac",
+        "  duymaz (7 modul icine gomuludur). Tek dis bagimlilik standart",
+        "  kutuphane olan  #include <Trade/Trade.mqh>  dir.",
+        "",
+        "  ONEMLI: MQL5\\Experts klasorunde ApexCombatEngine.mq5,",
+        "  ApexCombatEngine (1).mq5, (2), (3) ... gibi ESKI KOPYALAR ile",
+        "  ApexTypes.mqh / ApexTrade.mqh / ... gibi .mqh dosyalari varsa",
+        "  SILIN. Onlar moduler kaynak surumudur ve yanlarinda .mqh",
+        "  dosyalari olmadan DERLENMEZ ('file not found' hatasi verir).",
+        "",
+        "  Kaynak: Source/ klasorundedir (gelistirme icin).",
+        "  Bu dosyayi duzenlemeyin; Source icindeki modulleri degistirip",
+        "  `python3 Source/Tools/build_single_file.py` ile yeniden uretin.",
+        "",
     ]
-    banner = ("//" + "-" * 78)
+    banner = ("//" + "=" * 78)
     for bl in banner_lines:
-        banner += "\n//|  " + bl
-    banner += "\n//" + "-" * 78
-    parts.append(banner)
+        banner += "\n//|" + bl
+    banner += "\n//" + "=" * 78
+    parts = [banner, ""]
+    parts.append("//" + "-" * 78)
+    parts.append("//  Asagidaki kisim Source/ApexCombatEngine.mq5 basligidir.")
+    parts.append("//" + "-" * 78)
+    parts.append(head)
     parts.append("")
 
     for mod in MODULES:
