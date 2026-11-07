@@ -7,14 +7,20 @@
 //|           + mikro-scalp motoru + delta-notr savunma kalkani       |
 //|           + kendini onaran risk guvenlik duvari                   |
 //|                                                                  |
-//|  MODUL HARITASI                                                   |
-//|   Include/ApexTypes.mqh       : tipler, sabitler, yardimcilar     |
-//|   Include/ApexTrade.mqh       : yurutme + rol etiketli defter     |
-//|   Include/ApexSqueezeCore.mqh : LazyBear cekirdegi + turevler     |
-//|   Include/ApexAnalytics.mqh   : 5 boyutlu rejim analizi           |
-//|   Include/ApexGrid.mqh        : elastik grid + mod evrimi         |
-//|   Include/ApexScalp.mqh       : mikro-scalp + hedge kalkani       |
-//|   Include/ApexRisk.mqh        : sermaye koruma guvenlik duvari    |
+//|  MODUL HARITASI (tum dosyalar bu .mq5 ile AYNI duz klasordedir)    |
+//|   ApexTypes.mqh       : tipler, sabitler, yardimcilar             |
+//|   ApexTrade.mqh       : yurutme + rol etiketli defter             |
+//|   ApexSqueezeCore.mqh : LazyBear cekirdegi + turevler             |
+//|   ApexAnalytics.mqh   : 5 boyutlu rejim analizi                   |
+//|   ApexGrid.mqh        : elastik grid + mod evrimi                 |
+//|   ApexScalp.mqh       : mikro-scalp + hedge kalkani               |
+//|   ApexRisk.mqh        : sermaye koruma guvenlik duvari            |
+//|                                                                  |
+//|  ONEMLI: MetaEditor tırnakli include'larda alt klasorlu goreli    |
+//|  yolu guvenilir bicimde cozmez ("file not found"). Bu yuzden      |
+//|   DERLEMEYE HAZIR SURUM = ApexCombatEngine_SingleFile.mq5         |
+//|   (Tools/build_single_file.py ile uretilir; hicbir .mqh gerektir- |
+//|    mez, tek basina MQL5/Experts/ icine atilip derlenir).          |
 //|                                                                  |
 //|  "MULTI-THREAD" NOTU: MQL5 EA'lar tek is parcacikli calisir.      |
 //|  Bu motor gercek thread acmaz; bunun yerine cooperative (isbirlik-
