@@ -990,10 +990,10 @@ public:
          ResetLastError();
          switch((ENUM_ORDER_TYPE)order_type)
            {
-            case ORDER_TYPE_BUY_LIMIT:  ok = m_trade.BuyLimit (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_SELL_LIMIT: ok = m_trade.SellLimit(lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_BUY_STOP:   ok = m_trade.BuyStop  (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_SELL_STOP:  ok = m_trade.SellStop (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_BUY_LIMIT:  ok = m_trade.BuyLimit (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_SELL_LIMIT: ok = m_trade.SellLimit(lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_BUY_STOP:   ok = m_trade.BuyStop  (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_SELL_STOP:  ok = m_trade.SellStop (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
             default: return 0;
            }
          uint code = m_trade.ResultRetcode();
@@ -1335,12 +1335,15 @@ enum ENUM_APEX_SQZ_COLOR
    APX_SQZ_MAROON = 4  // val < 0 ve yukseliyor
   };
 
+// DİKKAT: MQL5'te enum uyeleri global isim uzayinda yasar; bu yuzden
+// ENUM_APEX_SQZ_COLOR icindeki APX_SQZ_NONE ile CARPISMAMASI icin
+// durum enumu uyeleri APX_SQZST_ on ekiyle adlandirildi.
 enum ENUM_APEX_SQZ_STATE
   {
-   APX_SQZ_UNKNOWN = 0,
-   APX_SQZ_ON      = 1, // sqzOn  : BB Keltner icinde -> sikisma
-   APX_SQZ_OFF     = 2, // sqzOff : BB Keltner disinda -> salinim
-   APX_SQZ_NONE    = 3
+   APX_SQZST_UNKNOWN = 0,
+   APX_SQZST_ON      = 1, // sqzOn  : BB Keltner icinde -> sikisma
+   APX_SQZST_OFF     = 2, // sqzOff : BB Keltner disinda -> salinim
+   APX_SQZST_NONE    = 3  // noSqz  : ikisi de degil
   };
 
 class CApexSqueeze
@@ -1392,7 +1395,7 @@ private:
      {
       int needed = (int)MathMax(m_bb_len, m_kc_len);
       if(index < needed - 1)
-         return APX_SQZ_UNKNOWN;
+         return APX_SQZST_UNKNOWN;
 
       double basis = 0.0;
       for(int j = index - m_bb_len + 1; j <= index; j++)
@@ -1427,9 +1430,9 @@ private:
       double upper_kc = ma + range_ma * m_kc_mult;
       double lower_kc = ma - range_ma * m_kc_mult;
 
-      if((lower_bb > lower_kc) && (upper_bb < upper_kc)) return APX_SQZ_ON;
-      if((lower_bb < lower_kc) && (upper_bb > upper_kc)) return APX_SQZ_OFF;
-      return APX_SQZ_NONE;
+      if((lower_bb > lower_kc) && (upper_bb < upper_kc)) return APX_SQZST_ON;
+      if((lower_bb < lower_kc) && (upper_bb > upper_kc)) return APX_SQZST_OFF;
+      return APX_SQZST_NONE;
      }
 
 public:
@@ -1494,7 +1497,7 @@ public:
         {
          m_colors[i] = (int)APX_SQZ_NONE;
          m_valid[i]  = false;
-         m_sqz[i]    = (int)APX_SQZ_UNKNOWN;
+         m_sqz[i]    = (int)APX_SQZST_UNKNOWN;
         }
 
       // 1) Detrend serisi
@@ -2071,7 +2074,7 @@ private:
       int bars = 0;
       for(int i = last; i >= 1; i--)
         {
-         if(g_sqz_main.Sqz(i) == (int)APX_SQZ_ON)
+         if(g_sqz_main.Sqz(i) == (int)APX_SQZST_ON)
             bars++;
          else
             break;
@@ -2086,7 +2089,7 @@ private:
         {
          int cur = g_sqz_main.Sqz(i);
          int prv = g_sqz_main.Sqz(i - 1);
-         if(cur != (int)APX_SQZ_ON && prv == (int)APX_SQZ_ON)
+         if(cur != (int)APX_SQZ_ON && prv == (int)APX_SQZST_ON)
            {
             s.bars_since_release = last - i;
             // Salinim anindaki momentum yonu
@@ -2106,10 +2109,10 @@ private:
         {
          int cur = g_sqz_main.Sqz(i);
          int prv = g_sqz_main.Sqz(i - 1);
-         if(cur == APX_SQZ_UNKNOWN || prv == APX_SQZ_UNKNOWN)
+         if(cur == (int)APX_SQZST_UNKNOWN || prv == (int)APX_SQZST_UNKNOWN)
             continue;
-         bool cur_on = (cur == (int)APX_SQZ_ON);
-         bool prv_on = (prv == (int)APX_SQZ_ON);
+         bool cur_on = (cur == (int)APX_SQZST_ON);
+         bool prv_on = (prv == (int)APX_SQZST_ON);
          if(cur_on != prv_on)
             flick++;
         }
@@ -4769,7 +4772,7 @@ void UpdatePanel()
       "D3 ATR     : %.*f | fiyatin yuzde %.3f | z=%+.2f | band=%s\n"
       "D4 Hacim   : POC %.*f  VAL %.*f  VAH %.*f | konum=%s denge=%.2f emilim=%.2f CVD=%+.2f\n"
       "D5 Mom.Tur : mom=%+.4f (z=%+.2f) hiz=%+.4f ivme=%+.4f flip=%.2f %s%s\n",
-      (g_snap.sqz_state == (int)APX_SQZ_ON ? "SIKISMA" : (g_snap.sqz_state == (int)APX_SQZ_OFF ? "SALINIM" : "notr")),
+      (g_snap.sqz_state == (int)APX_SQZST_ON ? "SIKISMA" : (g_snap.sqz_state == (int)APX_SQZST_OFF ? "SALINIM" : "notr")),
       g_snap.sqz_compress_bars, g_snap.bars_since_release, g_snap.sqz_energy, g_snap.sqz_flicker,
       g_snap.hurst, (g_snap.persistence == (int)PERSIST_TREND ? "trend kalici" :
                      (g_snap.persistence == (int)PERSIST_MEAN_REVERT ? "ortalamaya donus" : "rastgele")),

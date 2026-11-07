@@ -28,12 +28,15 @@ enum ENUM_APEX_SQZ_COLOR
    APX_SQZ_MAROON = 4  // val < 0 ve yukseliyor
   };
 
+// DİKKAT: MQL5'te enum uyeleri global isim uzayinda yasar; bu yuzden
+// ENUM_APEX_SQZ_COLOR icindeki APX_SQZ_NONE ile CARPISMAMASI icin
+// durum enumu uyeleri APX_SQZST_ on ekiyle adlandirildi.
 enum ENUM_APEX_SQZ_STATE
   {
-   APX_SQZ_UNKNOWN = 0,
-   APX_SQZ_ON      = 1, // sqzOn  : BB Keltner icinde -> sikisma
-   APX_SQZ_OFF     = 2, // sqzOff : BB Keltner disinda -> salinim
-   APX_SQZ_NONE    = 3
+   APX_SQZST_UNKNOWN = 0,
+   APX_SQZST_ON      = 1, // sqzOn  : BB Keltner icinde -> sikisma
+   APX_SQZST_OFF     = 2, // sqzOff : BB Keltner disinda -> salinim
+   APX_SQZST_NONE    = 3  // noSqz  : ikisi de degil
   };
 
 class CApexSqueeze
@@ -85,7 +88,7 @@ private:
      {
       int needed = (int)MathMax(m_bb_len, m_kc_len);
       if(index < needed - 1)
-         return APX_SQZ_UNKNOWN;
+         return APX_SQZST_UNKNOWN;
 
       double basis = 0.0;
       for(int j = index - m_bb_len + 1; j <= index; j++)
@@ -120,9 +123,9 @@ private:
       double upper_kc = ma + range_ma * m_kc_mult;
       double lower_kc = ma - range_ma * m_kc_mult;
 
-      if((lower_bb > lower_kc) && (upper_bb < upper_kc)) return APX_SQZ_ON;
-      if((lower_bb < lower_kc) && (upper_bb > upper_kc)) return APX_SQZ_OFF;
-      return APX_SQZ_NONE;
+      if((lower_bb > lower_kc) && (upper_bb < upper_kc)) return APX_SQZST_ON;
+      if((lower_bb < lower_kc) && (upper_bb > upper_kc)) return APX_SQZST_OFF;
+      return APX_SQZST_NONE;
      }
 
 public:
@@ -187,7 +190,7 @@ public:
         {
          m_colors[i] = (int)APX_SQZ_NONE;
          m_valid[i]  = false;
-         m_sqz[i]    = (int)APX_SQZ_UNKNOWN;
+         m_sqz[i]    = (int)APX_SQZST_UNKNOWN;
         }
 
       // 1) Detrend serisi

@@ -573,6 +573,31 @@ belirsiz ise o kadar çabuk kâr realize edilir.**
 
 ## 7. Bilinen Kısıtlar ve Dürüst Uyarılar
 
+### 7.0 Geliştirme sırasında yakalanan iki gerçek MQL5 tuzağı
+
+Bunlar derleyicinin verdiği hatalardan tespit edilip düzeltildi; kodda
+tekrarlanmaması için not düşülmüştür:
+
+1. **Enum üyeleri GLOBAL isim uzayında yaşar.** Aynı isim iki farklı `enum`
+   içinde tanımlanamaz:
+   ```mql5
+   enum ENUM_APEX_SQZ_COLOR { APX_SQZ_NONE = 0, ... };   // (A)
+   enum ENUM_APEX_SQZ_STATE { ... , APX_SQZ_NONE = 3 };  // HATA: already used
+   ```
+   Çözüm: `ENUM_APEX_SQZ_STATE` üyeleri `APX_SQZST_UNKNOWN / _ON / _OFF / _NONE`
+   olarak benzersizleştirildi. `Tools/build_single_file.py` artık üretim
+   sonrası enum üyesi çakışmasını da denetliyor.
+
+2. **`CTrade` bekleyen-emir imzası piyasa emrinden FARKLIDIR.**
+   ```mql5
+   trade.Buy (volume, symbol, price, sl, tp, comment);            // piyasa
+   trade.BuyLimit(volume, PRICE, SYMBOL, sl, tp, type_time, exp, comment); // bekleyen
+   ```
+   Argüman sırası karıştırılırsa derleyici hata değil, *"implicit conversion
+   from 'string' to 'number'"* uyarısı verir ve emir **yanlış sembole/fiyata**
+   gider. Dört bekleyen-emir çağrısı düzeltildi.
+
+
 1. **MQL5 tek iş parçacıklıdır.** "Multi-thread" talebi zaman dilimli cooperative
    görev mimarisiyle karşılanmıştır (bkz. §1.2). Gerçek paralellik, çoklu grafik
    örnekleriyle sağlanabilir.

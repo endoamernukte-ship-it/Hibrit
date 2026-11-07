@@ -753,7 +753,7 @@ void UpdatePanel()
       "D3 ATR     : %.*f | fiyatin yuzde %.3f | z=%+.2f | band=%s\n"
       "D4 Hacim   : POC %.*f  VAL %.*f  VAH %.*f | konum=%s denge=%.2f emilim=%.2f CVD=%+.2f\n"
       "D5 Mom.Tur : mom=%+.4f (z=%+.2f) hiz=%+.4f ivme=%+.4f flip=%.2f %s%s\n",
-      (g_snap.sqz_state == (int)APX_SQZ_ON ? "SIKISMA" : (g_snap.sqz_state == (int)APX_SQZ_OFF ? "SALINIM" : "notr")),
+      (g_snap.sqz_state == (int)APX_SQZST_ON ? "SIKISMA" : (g_snap.sqz_state == (int)APX_SQZST_OFF ? "SALINIM" : "notr")),
       g_snap.sqz_compress_bars, g_snap.bars_since_release, g_snap.sqz_energy, g_snap.sqz_flicker,
       g_snap.hurst, (g_snap.persistence == (int)PERSIST_TREND ? "trend kalici" :
                      (g_snap.persistence == (int)PERSIST_MEAN_REVERT ? "ortalamaya donus" : "rastgele")),

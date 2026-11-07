@@ -185,6 +185,21 @@ def main():
     if stack:
         problems.append("kapatilmamis %d parantez" % len(stack))
 
+    # MQL5'te enum uyeleri GLOBAL isim uzayinda yasar: ayni isim iki farkli
+    # enumda gecerse "identifier already used" hatasi verir.
+    nc = re.sub(r'//[^\n]*', '', out)
+    nc = re.sub(r'/\*.*?\*/', '', nc, flags=re.S)
+    nc = re.sub(r'"(\\.|[^"\\])*"', '""', nc)
+    enum_members = {}
+    for m in re.finditer(r'enum\s+(\w+)\s*\{([^}]*)\}', nc):
+        for line in m.group(2).split(','):
+            name = re.match(r'\s*(\w+)', line)
+            if name:
+                enum_members.setdefault(name.group(1), []).append(m.group(1))
+    for name, enums in enum_members.items():
+        if len(enums) > 1:
+            problems.append("enum uyesi %s birden fazla enumda tanimli: %s" % (name, enums))
+
     # uretilen dosyada yorum-disinda kalan "banner artigi" satir var mi?
     # (ornegin //| ile baslamayan "|  TEK DOSYA SURUM ..." satiri derleyiciyi
     #  raydan cikarip onlarca zincirleme hata uretir)

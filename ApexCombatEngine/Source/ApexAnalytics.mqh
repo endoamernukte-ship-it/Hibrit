@@ -371,7 +371,7 @@ private:
       int bars = 0;
       for(int i = last; i >= 1; i--)
         {
-         if(g_sqz_main.Sqz(i) == (int)APX_SQZ_ON)
+         if(g_sqz_main.Sqz(i) == (int)APX_SQZST_ON)
             bars++;
          else
             break;
@@ -386,7 +386,7 @@ private:
         {
          int cur = g_sqz_main.Sqz(i);
          int prv = g_sqz_main.Sqz(i - 1);
-         if(cur != (int)APX_SQZ_ON && prv == (int)APX_SQZ_ON)
+         if(cur != (int)APX_SQZ_ON && prv == (int)APX_SQZST_ON)
            {
             s.bars_since_release = last - i;
             // Salinim anindaki momentum yonu
@@ -406,10 +406,10 @@ private:
         {
          int cur = g_sqz_main.Sqz(i);
          int prv = g_sqz_main.Sqz(i - 1);
-         if(cur == APX_SQZ_UNKNOWN || prv == APX_SQZ_UNKNOWN)
+         if(cur == (int)APX_SQZST_UNKNOWN || prv == (int)APX_SQZST_UNKNOWN)
             continue;
-         bool cur_on = (cur == (int)APX_SQZ_ON);
-         bool prv_on = (prv == (int)APX_SQZ_ON);
+         bool cur_on = (cur == (int)APX_SQZST_ON);
+         bool prv_on = (prv == (int)APX_SQZST_ON);
          if(cur_on != prv_on)
             flick++;
         }

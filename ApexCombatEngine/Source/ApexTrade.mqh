@@ -298,10 +298,10 @@ public:
          ResetLastError();
          switch((ENUM_ORDER_TYPE)order_type)
            {
-            case ORDER_TYPE_BUY_LIMIT:  ok = m_trade.BuyLimit (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_SELL_LIMIT: ok = m_trade.SellLimit(lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_BUY_STOP:   ok = m_trade.BuyStop  (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
-            case ORDER_TYPE_SELL_STOP:  ok = m_trade.SellStop (lot, m_symbol, price_in, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_BUY_LIMIT:  ok = m_trade.BuyLimit (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_SELL_LIMIT: ok = m_trade.SellLimit(lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_BUY_STOP:   ok = m_trade.BuyStop  (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
+            case ORDER_TYPE_SELL_STOP:  ok = m_trade.SellStop (lot, price_in, m_symbol, sl, tp, ORDER_TIME_GTC, 0, tag); break;
             default: return 0;
            }
          uint code = m_trade.ResultRetcode();
