@@ -99,11 +99,15 @@ def main():
     head, body = split_main(main_text)
 
     parts = [head, ""]
-    banner = ("//+------------------------------------------------------------------+\n"
-              "|  TEK DOSYA SURUM - otomatik uretildi (Tools/build_single_file.py) |\n"
-              "|  Kaynak: ApexCombatEngine.mqh moduler seti                        |\n"
-              "|  BU DOSYAYI DUZENLEMEYIN; modulleri duzenleyip yeniden uretin.    |\n"
-              "+------------------------------------------------------------------+")
+    banner_lines = [
+        "TEK DOSYA SURUM - otomatik uretildi (Tools/build_single_file.py)",
+        "Kaynak: ApexCombatEngine.mq5 + 7 modul (moduler kaynak)",
+        "BU DOSYAYI DUZENLEMEYIN; modulleri duzenleyip yeniden uretin.",
+    ]
+    banner = ("//" + "-" * 78)
+    for bl in banner_lines:
+        banner += "\n//|  " + bl
+    banner += "\n//" + "-" * 78
     parts.append(banner)
     parts.append("")
 
@@ -162,6 +166,18 @@ def main():
                 break
     if stack:
         problems.append("kapatilmamis %d parantez" % len(stack))
+
+    # uretilen dosyada yorum-disinda kalan "banner artigi" satir var mi?
+    # (ornegin //| ile baslamayan "|  TEK DOSYA SURUM ..." satiri derleyiciyi
+    #  raydan cikarip onlarca zincirleme hata uretir)
+    for i, l in enumerate(out.split("\n"), 1):
+        st = l.strip()
+        if not st:
+            continue
+        if st.startswith("//") or st.startswith("#"):
+            continue
+        if st[0] == "|":   # yalnizca banner artiklari (| ile baslayan satir)
+            problems.append("yorum degil gibi gorunen satir %d: %s" % (i, st[:60]))
 
     lines = out.count("\n") + 1
     if problems:

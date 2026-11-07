@@ -85,7 +85,7 @@ private:
    double ScalpLot(const SRegimeSnapshot &s, const double sl_dist)
      {
       double lot = m_cfg.base_lot * m_cfg.scalp_lot_mult;
-      if((E_APEX_REGIME)s.regime == REGIME_ACCUMULATION)
+      if(s.regime == (int)REGIME_ACCUMULATION)
          lot *= 0.5;
       if(s.composite_heat > 0.6)
          lot *= 0.5;

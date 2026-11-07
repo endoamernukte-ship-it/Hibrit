@@ -74,7 +74,7 @@ private:
 
    double AdaptiveAnchor(const SRegimeSnapshot &s, const double price)
      {
-      if((E_APEX_GRID_MODE)m_mode == GRID_MODE_TREND_RIDER)
+      if(m_mode == (int)GRID_MODE_TREND_RIDER)
          return price;                                  // trendde merkez = piyasa
       if(s.poc > 0.0 && s.val > 0.0 && s.vah > 0.0)
          return (s.val + s.vah) * 0.5;                  // dengede merkez = deger alani
@@ -110,7 +110,7 @@ private:
 
    int    OrderTypeFor(const int mode, const int side)
      {
-      if((E_APEX_GRID_MODE)mode == GRID_MODE_TREND_RIDER)
+      if(mode == (int)GRID_MODE_TREND_RIDER)
          return (side > 0 ? (int)ORDER_TYPE_BUY_STOP : (int)ORDER_TYPE_SELL_STOP);
       return (side > 0 ? (int)ORDER_TYPE_BUY_LIMIT : (int)ORDER_TYPE_SELL_LIMIT);
      }
@@ -184,7 +184,7 @@ private:
       double sl_dist = (s.atr > 0.0 ? s.atr * m_cfg.grid_sl_atr : m_step * 6.0);
       double tp_dist = (s.atr > 0.0 ? s.atr * m_cfg.grid_tp_atr : m_step * 2.0);
 
-      if((E_APEX_GRID_MODE)m_mode == GRID_MODE_TREND_RIDER)
+      if(m_mode == (int)GRID_MODE_TREND_RIDER)
         {
          int d = (m_trend_dir != 0 ? m_trend_dir : (s.trend_dir != 0 ? s.trend_dir : 1));
          for(int i = 1; i <= n; i++)
@@ -557,7 +557,7 @@ private:
         }
 
       // 5) Trend binicisinde izleyen stop (chandelier)
-      if((E_APEX_GRID_MODE)m_mode == GRID_MODE_TREND_RIDER && s.atr > 0.0)
+      if(m_mode == (int)GRID_MODE_TREND_RIDER && s.atr > 0.0)
         {
          double trail = s.atr * 1.2;
          for(int i = 0; i < g_exec.BookSize(); i++)
@@ -701,7 +701,7 @@ public:
       int want_mode = ModeFromRegime(s.regime);
       if(want_mode != m_mode)
          ApplyModeTransition(want_mode, s, price);
-      else if((E_APEX_GRID_MODE)m_mode == GRID_MODE_TREND_RIDER && s.trend_dir != 0 && s.trend_dir != m_trend_dir)
+      else if(m_mode == (int)GRID_MODE_TREND_RIDER && s.trend_dir != 0 && s.trend_dir != m_trend_dir)
         {
          // Trend yonu tersine dondu: eski yonun bacaklari kesilir
          m_trend_dir = s.trend_dir;
@@ -715,7 +715,7 @@ public:
       ComputeElasticStep(s);
 
       // --- Dondurulmus mod: yalnizca mevcutlari izle ---
-      if((E_APEX_GRID_MODE)m_mode == GRID_MODE_FROZEN)
+      if(m_mode == (int)GRID_MODE_FROZEN)
         {
          g_exec.DeleteOrdersRole((int)ROLE_GRID);
          if(m_action == "")

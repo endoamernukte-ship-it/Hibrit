@@ -745,7 +745,7 @@ void UpdatePanel()
    ulong now = GetTickCount();
    if((now - g_last_panel) < 400)
       return;   // paneli her tikta yeniden cizme
-   g_last_panel = now;
+   g_last_panel = (datetime)now;
 
    string dims = StringFormat(
       "D1 Squeeze : %s | sikisma %d bar | salinim %d bar once | enerji %.2f | titreme %d\n"
