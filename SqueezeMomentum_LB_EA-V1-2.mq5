@@ -60,21 +60,41 @@
 //|     büyümesin diye YENİ pozisyon açılmaz.                        |
 //|   * Kapatılabilir; o zaman her sinyal tek pozisyon açar.         |
 //|                                                                  |
+//|  HTF TAŞIMA + HASAT (v1.40)                                      |
+//|   * Hızlı TF'de (örn. M1) açılan pozisyon, ayarlanan süre veya   |
+//|     mum sayısı kadar TP'ye ulaşamazsa "TAŞINAN" (escort) olur.   |
+//|     MT5'te bir pozisyonu fiziksel olarak başka grafiğe taşımak   |
+//|     mümkün değildir; değişen şey ÇIKIŞ YÖNETİMİDİR: taşınan      |
+//|     pozisyonun TP/SL sayımı artık üst zaman diliminin (örn. H1)  |
+//|     Squeeze Momentum sinyalleriyle yapılır. Pozisyon ve ticket   |
+//|     aynı kalır, yalnızca karar veren seri değişir.               |
+//|   * Taşınan pozisyon varken hızlı TF onun TERSİNE "HASAT"        |
+//|     işlemleri açar (örn. long H1'de taşınırken short'lar M1'de   |
+//|     hızlı kâr toplar). Hasat işlemleri kendi kurallarıyla        |
+//|     kapanır (para TP/SL, hızlı sinyal sayımı, süre sınırı) ve    |
+//|     toplanan kâr panelde birikir.                                |
+//|   * Opsiyonel: biriken hasat kârı eşiği aşınca taşınan           |
+//|     pozisyondan kısmi kâr alınır (PositionClosePartial).         |
+//|   * Risk filtreleri: taşınan yönde yeni hızlı TF pozisyonu       |
+//|     açılmaz, taşımanın maksimum süresi ve para SL'i tanımlı      |
+//|     olabilir, hasat pozisyon sayısı sınırlanır.                  |
+//|   * Bu motor HEDGING hesap gerektirir (aynı anda ters yönde      |
+//|     pozisyon). Netting hesapta pozisyonlar netleşir.             |
+//|                                                                  |
 //|  NOT: TP/SL sinyal sayımıyla çalıştığı için bunlar sabit fiyat   |
 //|  emri olarak brokera gönderilmez; sayım dolunca EA pozisyonu     |
 //|  piyasadan kapatır. Bu yüzden EA'nın açık kalması gerekir.       |
 //|  Ek güvenlik için sabit TP/SL (point) de tanımlanabilir.         |
 //+------------------------------------------------------------------+
 #property copyright "Squeeze Momentum [LazyBear] - MT5 EA"
-#property version   "1.31"
+#property version   "1.40"
 #property strict
-#property description "Squeeze Momentum [LazyBear] renk değişimi sinyalleriyle işlem açar"
-#property description "Sinyal renk geçişleri (BUY/SELL) girdilerden ayrı ayrı seçilebilir"
-#property description "Otomatik sıfırlama: kâr/zarar hedefine ulaşınca kapatıp yeni döngü başlatır"
-#property description "Pozisyon dengeleme: long/short farkını istenen aralıkta tutar"
-#property description "Gösterge matematiği LazyBear PineScript koduyla birebir aynıdır"
-#property description "Çıkışlar: girişe göre uygun yöndeki 3. sinyal TP, ters yöndeki 3. sinyal SL (ayarlanabilir)"
-#property description "Ters işlem ayarı: BUY sinyali SELL, SELL sinyali BUY açar (açık/kapalı seçilebilir)"
+#property description "Squeeze Momentum [LazyBear] renk geçişi sinyalleriyle işlem açar"
+#property description "HTF taşıma: yaşlanan pozisyon üst zaman diliminde (örn. H1) yönetilir"
+#property description "Hasat: taşınan pozisyonun tersine hızlı TF kâr toplama"
+#property description "Çıkışlar: sinyal sayımı + sabit TP/SL + para bazlı çıkışlar"
+#property description "Otomatik sıfırlama ve long/short dengeleme"
+#property description "Gösterge matematiği LazyBear PineScript ile birebir"
 
 #include <Trade/Trade.mqh>
 
@@ -117,6 +137,21 @@ enum ENUM_SQZ_RESET_MODE
    SQZ_RESET_PROFIT = 0, // Kâr hedefi: referans +X kâr olunca (+3$)
    SQZ_RESET_LOSS   = 1, // Zarar eşiği: referans -X zarar olunca (-3$)
    SQZ_RESET_BOTH   = 2  // Her iki yön: ±X olunca
+  };
+
+// HTF taşıma (escort) kapsamı: hangi yöndeki pozisyonlar taşınır?
+enum ENUM_SQZ_ESCORT_MODE
+  {
+   SQZ_ESCORT_LONG_ONLY  = 0, // Yalnızca LONG pozisyonlar taşınır
+   SQZ_ESCORT_SHORT_ONLY = 1, // Yalnızca SHORT pozisyonlar taşınır
+   SQZ_ESCORT_BOTH       = 2  // Her iki yön taşınır
+  };
+
+// Taşınan pozisyonun HTF sinyal sayımı nereden başlar?
+enum ENUM_SQZ_ESCORT_ANCHOR
+  {
+   SQZ_ESCORT_ANCHOR_SWITCH = 0, // Taşıma anından itibaren say (güvenli)
+   SQZ_ESCORT_ANCHOR_ENTRY  = 1  // Pozisyon açılışından itibaren say
   };
 
 //+------------------------------------------------------------------+
@@ -173,6 +208,37 @@ input bool            InpBalanceEnabled  = true;                 // Dengeleme a�
 input int             InpBalanceMaxGap   = 2;                    // İki yöndeki maksimum pozisyon farkı (min 1)
 input int             InpBalanceMaxBatch = 0;                    // Tek sinyalde en fazla kaç telafi pozisyonu - 0 = sınırsız
 
+input group "8) HTF TAŞIMA - yaşlanan pozisyonu üst zaman diliminde yönet"
+input bool                   InpEscortEnabled       = true;              // Taşıma motoru açık
+input ENUM_SQZ_ESCORT_MODE   InpEscortMode          = SQZ_ESCORT_LONG_ONLY; // Hangi yöndeki pozisyonlar taşınır
+input ENUM_TIMEFRAMES        InpEscortTimeframe     = PERIOD_H1;         // Taşıma zaman dilimi (işlem TF'sinden büyük olmalı)
+input int                    InpEscortAfterMinutes  = 60;                // Açılıştan kaç dakika sonra taşınır (0 = hemen)
+input int                    InpEscortAfterBars     = 0;                 // ... veya işlem TF'sinde kaç mum sonra (0 = kapalı)
+input bool                   InpEscortOnlyIfProfit  = false;             // Yalnızca kârdaki pozisyonlar taşınsın
+input ENUM_SQZ_ESCORT_ANCHOR InpEscortAnchor        = SQZ_ESCORT_ANCHOR_SWITCH; // HTF sayımı nereden başlasın
+input int                    InpEscortTpSignalCount = 2;                 // Taşınan: TP için uygun HTF sinyal sayısı (0 = kapalı)
+input int                    InpEscortSlSignalCount = 2;                 // Taşınan: SL için ters HTF sinyal sayısı (0 = kapalı)
+input int                    InpEscortFixedTpPoints = 0;                 // Taşınan: sabit TP (point, 0 = kapalı)
+input int                    InpEscortFixedSlPoints = 0;                 // Taşınan: sabit SL (point, 0 = kapalı)
+input bool                   InpEscortClearOldExits = true;              // Taşımada eski sabit TP/SL seviyelerini temizle
+input int                    InpEscortMaxRideHours  = 24;                // Taşıma üst süre sınırı (saat, 0 = kapalı)
+input double                 InpEscortStopLossMoney = 0.0;               // Taşınan pozisyon para SL (hesap birimi, 0 = kapalı)
+input bool                   InpEscortBlockSameSide = true;              // Taşınan yönde yeni hızlı TF pozisyonu açma
+
+input group "9) HASAT - taşınan pozisyonun tersine hızlı TF kâr toplama"
+input bool   InpHarvestEnabled              = true;   // Hasat motoru açık
+input double InpHarvestLot                  = 0.0;    // Hasat lotu (0 = normal lot)
+input int    InpHarvestMaxPositions         = 4;      // Aynı anda en fazla hasat pozisyonu (0 = sınırsız)
+input double InpHarvestTakeProfitMoney      = 1.0;    // Hasat para TP (hesap birimi, 0 = kapalı)
+input double InpHarvestStopLossMoney        = 2.0;    // Hasat para SL (hesap birimi, 0 = kapalı)
+input int    InpHarvestTpSignalCount        = 1;      // Hasat TP: uygun hızlı TF sinyal sayısı (0 = kapalı)
+input int    InpHarvestSlSignalCount        = 2;      // Hasat SL: ters hızlı TF sinyal sayısı (0 = kapalı)
+input int    InpHarvestMaxLifeMinutes       = 0;      // Hasat üst süre sınırı (dakika, 0 = kapalı)
+input bool   InpHarvestTrimEnabled          = false;  // Biriken hasat kârıyla taşınan pozisyondan kısmi kâr al
+input double InpHarvestTrimProfit           = 5.0;    // Kısmi kâr için birikmesi gereken hasat kârı
+input double InpHarvestTrimPercent          = 50.0;   // Her tetikte kapatılacak hacim (%)
+input bool   InpHarvestTrimOnlyIfRideProfit = true;   // Kısmi kâr yalnızca taşınan pozisyon kârdayken
+
 //+------------------------------------------------------------------+
 //| Global durum                                                     |
 //+------------------------------------------------------------------+
@@ -193,6 +259,26 @@ int             g_reset_count         = 0;     // Toplam otomatik sıfırlama sa
 int             g_balance_fill_count  = 0;     // Dengeleme ile açılan ek pozisyon sayısı
 int             g_balance_skip_count  = 0;     // Fark limiti nedeniyle atlanan sinyal sayısı
 datetime        g_reset_last_try      = 0;     // Son kapatma denemesi (tekrar log/emir spam'i önlenir)
+
+// --- HTF taşıma (escort) durumu ---
+ENUM_TIMEFRAMES    g_escort_tf        = PERIOD_H1; // Çözümlenmiş taşıma zaman dilimi
+datetime           g_escort_last_bar  = 0;         // Önbellekteki son HTF mumu
+MqlRates           g_escort_rates[];               // HTF mum serisi (0 = en eski)
+double             g_escort_values[];              // HTF momentum değerleri
+ENUM_SQZ_BAR_COLOR g_escort_colors[];              // HTF mum renkleri
+bool               g_escort_valid[];               // HTF geçerlilik
+bool               g_escort_ready     = false;     // HTF serisi hazır mı?
+datetime           g_escort_exit_check = 0;        // Son HTF sinyal taraması
+ulong              g_escort_applied[];             // Emir seviyeleri güncellenmiş taşınan pozisyonlar
+int                g_escort_count     = 0;         // Panel: taşınan pozisyon sayısı
+
+// --- Hasat durumu ---
+ulong  g_harvest_watch[];           // Kapanışı izlenen hasat pozisyon ticket'ları
+double g_harvest_pocket       = 0.0; // Toplam gerçekleşen hasat sonucu
+double g_harvest_credit       = 0.0; // Kısmi kâr için kullanılabilir birikim
+int    g_harvest_opened       = 0;   // Açılan hasat pozisyonu sayısı
+int    g_harvest_closed       = 0;   // Kapanan hasat pozisyonu sayısı
+double g_harvest_trimmed_lot  = 0.0; // Kısmi kârla kapatılan toplam hacim
 
 //+------------------------------------------------------------------+
 //| Yardımcılar                                                      |
@@ -549,14 +635,20 @@ ENUM_SQZ_STATE ComputeSqueezeState(const MqlRates &rates[], const int index)
    return SQZ_STATE_NONE;
   }
 
-int LoadRates(MqlRates &rates[])
+// Belirtilen zaman dilimi için mum serisini yükler (0 = en eski mum).
+int LoadRatesFor(const ENUM_TIMEFRAMES tf, MqlRates &rates[])
   {
    int needed = (int)MathMax(InpHistoryBars, (InpKCLength * 4) + 10);
    ArraySetAsSeries(rates, false); // 0 = en eski mum
-   int copied = CopyRates(_Symbol, g_timeframe, 0, needed, rates);
+   int copied = CopyRates(_Symbol, tf, 0, needed, rates);
    if(copied > 0)
       ArrayResize(rates, copied);
    return copied;
+  }
+
+int LoadRates(MqlRates &rates[])
+  {
+   return LoadRatesFor(g_timeframe, rates);
   }
 
 //+------------------------------------------------------------------+
@@ -795,37 +887,49 @@ int PositionsToOpen(const int trade_side, string &note)
   }
 
 //+------------------------------------------------------------------+
-//| Sinyal sayımına dayalı çıkış kontrolü                            |
+//| Sinyal sayımına dayalı çıkış kontrolü (GENEL MOTOR)              |
 //|                                                                  |
-//| Pozisyon açıldıktan SONRA gelen sinyaller kronolojik sırayla     |
-//| taranır. Pozisyon yönüyle aynı yönlü ve giriş fiyatını geçen     |
-//| sinyaller TP sayacını, ters yönlü ve giriş fiyatını geçen        |
-//| sinyaller SL sayacını artırır. Sayacı önce dolduran çıkış        |
-//| gerçekleşir. Böylece EA yeniden başlatılsa bile sayım, pozisyon  |
-//| açılış zamanına göre geçmiş mumlardan tekrar hesaplanabilir.     |
+//| Bu motor üç farklı yerde kullanılır:                             |
+//|   1) Hızlı TF: normal pozisyonlar  (sayım = pozisyon açılışı)    |
+//|   2) Hızlı TF: hasat pozisyonları  (kendi TP/SL sayılarıyla)     |
+//|   3) HTF     : taşınan pozisyonlar (sayım = taşıma anı)          |
+//|                                                                  |
+//| count_from zamanından SONRA kapanan mumların sinyalleri          |
+//| kronolojik sırayla taranır. Pozisyon yönüyle aynı yönlü ve giriş |
+//| fiyatını geçen sinyaller TP sayacını, ters yönlü ve giriş        |
+//| fiyatını geçen sinyaller SL sayacını artırır. Sayacı önce        |
+//| dolduran çıkış gerçekleşir. Sayım geçmiş mumlardan yeniden       |
+//| hesaplanabildiği için EA yeniden başlatılsa da bozulmaz.         |
 //+------------------------------------------------------------------+
-int EvaluatePositionExit(const ulong ticket,
-                         const MqlRates &rates[],
-                         const ENUM_SQZ_BAR_COLOR &colors[],
-                         const bool &valid[],
-                         string &reason,
-                         int &tp_count_out,
-                         int &sl_count_out)
+int EvaluateExitSeries(const ulong ticket,
+                       const MqlRates &rates[],
+                       const ENUM_SQZ_BAR_COLOR &colors[],
+                       const bool &valid[],
+                       const ENUM_TIMEFRAMES series_tf,
+                       const datetime count_from,
+                       const int tp_needed,
+                       const int sl_needed,
+                       string &reason,
+                       int &tp_count_out,
+                       int &sl_count_out)
   {
    reason       = "";
    tp_count_out = 0;
    sl_count_out = 0;
+   if(tp_needed <= 0 && sl_needed <= 0)
+      return 0;
    if(!SelectOurPosition(ticket))
       return 0;
 
    int      side       = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
    double   entry      = PositionGetDouble(POSITION_PRICE_OPEN);
-   datetime open_time  = (datetime)PositionGetInteger(POSITION_TIME);
    if(side == 0 || entry <= 0.0)
       return 0;
 
    int last_closed = ArraySize(rates) - 2; // Son index oluşan mumdur
-   int period_seconds = PeriodSeconds(g_timeframe);
+   if(last_closed < 1)
+      return 0;
+   int period_seconds = PeriodSeconds(series_tf);
    if(period_seconds <= 0)
       period_seconds = 60;
 
@@ -837,10 +941,10 @@ int EvaluatePositionExit(const ulong ticket,
       if(signal == 0)
          continue;
 
-      // Sinyal, mum kapandığında oluşur. Pozisyonu açan sinyalin kendisi
-      // sayılmaz; sadece açılıştan sonra kapanan mumların sinyalleri sayılır.
+      // Sinyal, mum kapandığında oluşur. Sayımın başladığı anı (açılış veya
+      // taşıma anı) geçmeyen sinyaller sayılmaz.
       datetime signal_close_time = rates[i].time + period_seconds;
-      if(signal_close_time <= open_time)
+      if(signal_close_time <= count_from)
          continue;
 
       double signal_price = rates[i].close;
@@ -860,20 +964,22 @@ int EvaluatePositionExit(const ulong ticket,
       if(is_tp_signal)
         {
          tp_count_out++;
-         if(InpTakeProfitSignalCount > 0 && tp_count_out >= InpTakeProfitSignalCount)
+         if(tp_needed > 0 && tp_count_out >= tp_needed)
            {
-            reason = StringFormat("TP (sinyal sayımı): %d. uygun %s sinyali, giriş=%.*f sinyal fiyatı=%.*f",
-                                  tp_count_out, SideName(signal), _Digits, entry, _Digits, signal_price);
+            reason = StringFormat("TP (sinyal sayımı, %s): %d. uygun %s sinyali, giriş=%.*f sinyal fiyatı=%.*f",
+                                  EnumToString(series_tf), tp_count_out, SideName(signal),
+                                  _Digits, entry, _Digits, signal_price);
             return 1;
            }
         }
       if(is_sl_signal)
         {
          sl_count_out++;
-         if(InpStopLossSignalCount > 0 && sl_count_out >= InpStopLossSignalCount)
+         if(sl_needed > 0 && sl_count_out >= sl_needed)
            {
-            reason = StringFormat("SL (sinyal sayımı): %d. uygun %s sinyali, giriş=%.*f sinyal fiyatı=%.*f",
-                                  sl_count_out, SideName(signal), _Digits, entry, _Digits, signal_price);
+            reason = StringFormat("SL (sinyal sayımı, %s): %d. uygun %s sinyali, giriş=%.*f sinyal fiyatı=%.*f",
+                                  EnumToString(series_tf), sl_count_out, SideName(signal),
+                                  _Digits, entry, _Digits, signal_price);
             return -1;
            }
         }
@@ -881,11 +987,20 @@ int EvaluatePositionExit(const ulong ticket,
    return 0;
   }
 
+//+------------------------------------------------------------------+
+//| Hızlı TF çıkışları (normal + hasat pozisyonları)                 |
+//|                                                                  |
+//| Taşınan (HTF) pozisyonlar burada ATLANIR; onların çıkışları      |
+//| ProcessEscortPositions() içinde üst zaman dilimi serisiyle       |
+//| yönetilir. Hasat pozisyonları ise kendi (daha hızlı) TP/SL       |
+//| sayılarıyla kapatılır.                                           |
+//+------------------------------------------------------------------+
 void ManageSignalExits(const MqlRates &rates[],
                        const ENUM_SQZ_BAR_COLOR &colors[],
                        const bool &valid[])
   {
-   if(InpTakeProfitSignalCount <= 0 && InpStopLossSignalCount <= 0)
+   if(InpTakeProfitSignalCount <= 0 && InpStopLossSignalCount <= 0 &&
+      InpHarvestTpSignalCount <= 0 && InpHarvestSlSignalCount <= 0)
       return;
 
    ulong tickets[];
@@ -902,13 +1017,619 @@ void ManageSignalExits(const MqlRates &rates[],
 
    for(int i = 0; i < ArraySize(tickets); i++)
      {
+      ulong ticket = tickets[i];
+      if(!SelectOurPosition(ticket))
+         continue;
+      if(IsEscorted(ticket))
+         continue; // Taşınan pozisyon artık hızlı TF sinyalleriyle kapatılmaz
+
+      bool harvest   = IsHarvestPosition(ticket);
+      int  tp_needed = (harvest ? InpHarvestTpSignalCount : InpTakeProfitSignalCount);
+      int  sl_needed = (harvest ? InpHarvestSlSignalCount : InpStopLossSignalCount);
+      if(tp_needed <= 0 && sl_needed <= 0)
+         continue;
+
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
       string reason = "";
       int tp_count = 0;
       int sl_count = 0;
-      int result = EvaluatePositionExit(tickets[i], rates, colors, valid, reason, tp_count, sl_count);
+      int result = EvaluateExitSeries(ticket, rates, colors, valid, g_timeframe,
+                                      open_time, tp_needed, sl_needed,
+                                      reason, tp_count, sl_count);
+      if(result != 0)
+         CloseOurPosition(ticket, reason);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| HTF taşıma (escort) + hasat yardımcıları                         |
+//+------------------------------------------------------------------+
+bool ListHas(const ulong &list[], const ulong ticket)
+  {
+   for(int i = 0; i < ArraySize(list); i++)
+      if(list[i] == ticket)
+         return true;
+   return false;
+  }
+
+void ListAdd(ulong &list[], const ulong ticket)
+  {
+   if(ListHas(list, ticket))
+      return;
+   int n = ArraySize(list);
+   if(ArrayResize(list, n + 1) == n + 1)
+      list[n] = ticket;
+  }
+
+void ListRemove(ulong &list[], const ulong ticket)
+  {
+   int n = ArraySize(list);
+   for(int i = n - 1; i >= 0; i--)
+     {
+      if(list[i] != ticket)
+         continue;
+      for(int j = i; j < n - 1; j++)
+         list[j] = list[j + 1];
+      ArrayResize(list, n - 1);
+      return;
+     }
+  }
+
+string PriceText(const double price)
+  {
+   if(price <= 0.0)
+      return "yok";
+   return DoubleToString(price, _Digits);
+  }
+
+string EscortModeName(const ENUM_SQZ_ESCORT_MODE mode)
+  {
+   if(mode == SQZ_ESCORT_LONG_ONLY)
+      return "yalnızca LONG";
+   if(mode == SQZ_ESCORT_SHORT_ONLY)
+      return "yalnızca SHORT";
+   return "her iki yön";
+  }
+
+bool EscortSideEnabled(const int side)
+  {
+   if(side == 0)
+      return false;
+   if(InpEscortMode == SQZ_ESCORT_LONG_ONLY)
+      return (side > 0);
+   if(InpEscortMode == SQZ_ESCORT_SHORT_ONLY)
+      return (side < 0);
+   return true;
+  }
+
+// Taşıma eşiği (saniye). Dakika ve mum tetiklerinden ÖNCE dolan geçerlidir.
+// 0 = pozisyon açıldığı anda taşınır.
+int EscortThresholdSeconds()
+  {
+   int work_seconds = PeriodSeconds(g_timeframe);
+   if(work_seconds <= 0)
+      work_seconds = 60;
+
+   int by_minutes = 0;
+   if(InpEscortAfterMinutes > 0)
+      by_minutes = InpEscortAfterMinutes * 60;
+   int by_bars = 0;
+   if(InpEscortAfterBars > 0)
+      by_bars = InpEscortAfterBars * work_seconds;
+
+   if(by_minutes <= 0)
+      return (by_bars > 0 ? by_bars : 0);
+   if(by_bars > 0 && by_bars < by_minutes)
+      return by_bars;
+   return by_minutes;
+  }
+
+string EscortThresholdText()
+  {
+   int seconds = EscortThresholdSeconds();
+   if(seconds <= 0)
+      return "hemen";
+   if(seconds % 3600 == 0)
+      return StringFormat("%d saat", seconds / 3600);
+   if(seconds % 60 == 0)
+      return StringFormat("%d dakika", seconds / 60);
+   return StringFormat("%d saniye", seconds);
+  }
+
+// Pozisyonun taşınmaya başladığı an (açılış + eşik).
+datetime EscalationTime(const datetime open_time)
+  {
+   return (datetime)((long)open_time + (long)EscortThresholdSeconds());
+  }
+
+// Taşınan pozisyonun HTF sinyal sayımı hangi andan başlar?
+datetime EscortCountFrom(const datetime open_time)
+  {
+   if(InpEscortAnchor == SQZ_ESCORT_ANCHOR_ENTRY)
+      return open_time;
+   return EscalationTime(open_time);
+  }
+
+bool IsHarvestPosition(const ulong ticket)
+  {
+   if(!SelectOurPosition(ticket))
+      return false;
+   if(ListHas(g_harvest_watch, ticket))
+      return true;
+   string comment = PositionGetString(POSITION_COMMENT);
+   return (StringFind(comment, "HARV") >= 0);
+  }
+
+// Pozisyon taşınmış mı? (kapsam uygun + eşik doldu + hasat değil)
+bool IsEscorted(const ulong ticket)
+  {
+   if(!InpEscortEnabled)
+      return false;
+   if(!SelectOurPosition(ticket))
+      return false;
+   if(IsHarvestPosition(ticket))
+      return false;
+
+   int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+   if(!EscortSideEnabled(side))
+      return false;
+
+   datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+   if(TimeCurrent() < EscalationTime(open_time))
+      return false;
+
+   if(InpEscortOnlyIfProfit)
+     {
+      double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(profit < 0.0)
+         return false;
+     }
+   return true;
+  }
+
+int CountEscortedPositions(const int side_filter = 0)
+  {
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !IsEscorted(ticket))
+         continue;
+      int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+      if(side_filter == 0 || side == side_filter)
+         count++;
+     }
+   return count;
+  }
+
+int CountHarvestPositions(const int side_filter = 0)
+  {
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !IsHarvestPosition(ticket))
+         continue;
+      int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+      if(side_filter == 0 || side == side_filter)
+         count++;
+     }
+   return count;
+  }
+
+// Verilen fiyattan sabit TP/SL seviyelerini hesaplar (0 = o seviye kapalı).
+void BuildFixedPrices(const int side, const double entry,
+                      const int tp_points, const int sl_points,
+                      double &sl, double &tp)
+  {
+   sl = 0.0;
+   tp = 0.0;
+   if(side == 0 || entry <= 0.0)
+      return;
+
+   long stops_level  = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freeze_level = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double min_distance = MathMax((double)stops_level, (double)freeze_level) * _Point;
+
+   if(tp_points > 0)
+     {
+      double distance = MathMax(tp_points * _Point, min_distance + TickSize());
+      tp = NormalizePriceToTick(entry + side * distance, (side > 0 ? 1 : -1));
+     }
+   if(sl_points > 0)
+     {
+      double distance = MathMax(sl_points * _Point, min_distance + TickSize());
+      sl = NormalizePriceToTick(entry - side * distance, (side > 0 ? -1 : 1));
+     }
+  }
+
+// Taşınan pozisyonun emir seviyelerini (SL/TP) yalnızca BİR KEZ günceller.
+// Dönen değer: 1 = tamam / yapılacak bir şey yok, -1 = başarısız (yeniden denenecek)
+int ApplyEscortExits(const ulong ticket)
+  {
+   if(ListHas(g_escort_applied, ticket))
+      return 1;
+   if(!SelectOurPosition(ticket))
+      return 1;
+
+   int    side   = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+   double entry  = PositionGetDouble(POSITION_PRICE_OPEN);
+   double cur_sl = PositionGetDouble(POSITION_SL);
+   double cur_tp = PositionGetDouble(POSITION_TP);
+
+   double new_sl = 0.0;
+   double new_tp = 0.0;
+   BuildFixedPrices(side, entry, InpEscortFixedTpPoints, InpEscortFixedSlPoints, new_sl, new_tp);
+
+   // Sabit seviye tanımlı değilse: eski seviyeler korunur ya da temizlenir.
+   if(InpEscortFixedSlPoints <= 0 && !InpEscortClearOldExits)
+      new_sl = cur_sl;
+   if(InpEscortFixedTpPoints <= 0 && !InpEscortClearOldExits)
+      new_tp = cur_tp;
+
+   // Seviyeler güncel piyasaya göre geçerli aralıkta mı? Değilse içeri çekilir.
+   MqlTick tick;
+   if(SymbolInfoTick(_Symbol, tick) && tick.bid > 0.0 && tick.ask > 0.0)
+     {
+      long stops_level = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      double min_distance = MathMax((double)stops_level, 1.0) * _Point + TickSize();
+      if(side > 0)
+        {
+         if(new_sl > 0.0 && new_sl > tick.bid - min_distance)
+            new_sl = NormalizePriceToTick(tick.bid - min_distance, -1);
+         if(new_tp > 0.0 && new_tp < tick.ask + min_distance)
+            new_tp = NormalizePriceToTick(tick.ask + min_distance, 1);
+        }
+      else
+        {
+         if(new_sl > 0.0 && new_sl < tick.ask + min_distance)
+            new_sl = NormalizePriceToTick(tick.ask + min_distance, 1);
+         if(new_tp > 0.0 && new_tp > tick.bid - min_distance)
+            new_tp = NormalizePriceToTick(tick.bid - min_distance, -1);
+        }
+     }
+
+   double tick_size = TickSize();
+   bool sl_same = (MathAbs(new_sl - cur_sl) < tick_size * 0.5);
+   bool tp_same = (MathAbs(new_tp - cur_tp) < tick_size * 0.5);
+   if(sl_same && tp_same)
+     {
+      ListAdd(g_escort_applied, ticket);
+      return 1;
+     }
+
+   bool sent = trade.PositionModify(ticket, new_sl, new_tp);
+   if(!TradeRetcodeOK(sent))
+     {
+      PrintFormat("Taşıma: emir seviyeleri güncellenemedi ticket=%I64u retcode=%u (%s). Yeniden denenecek.",
+                  ticket, trade.ResultRetcode(), trade.ResultRetcodeDescription());
+      return -1;
+     }
+   ListAdd(g_escort_applied, ticket);
+   PrintFormat("Taşıma: ticket=%I64u yeni seviyeler SL=%s TP=%s | taşıma TF=%s",
+               ticket, PriceText(new_sl), PriceText(new_tp), EnumToString(g_escort_tf));
+   g_last_action = StringFormat("Pozisyon %s taşındı: SL=%s TP=%s",
+                                IntegerToString((long)ticket),
+                                PriceText(new_sl), PriceText(new_tp));
+   return 1;
+  }
+
+// HTF (taşıma) zaman diliminin Squeeze Momentum serisini hazırlar.
+// Seri yalnızca yeni HTF mumu oluştuğunda yeniden hesaplanır.
+bool EnsureEscortData()
+  {
+   if(!InpEscortEnabled)
+      return false;
+
+   datetime bar_time = iTime(_Symbol, g_escort_tf, 0);
+   if(bar_time <= 0)
+     {
+      g_escort_ready = false;
+      return false;
+     }
+   if(g_escort_ready && bar_time == g_escort_last_bar && ArraySize(g_escort_colors) > 0)
+      return true;
+
+   int copied = LoadRatesFor(g_escort_tf, g_escort_rates);
+   int min_bars = (int)MathMax((2 * InpKCLength) + 5, InpBBLength + 5);
+   if(copied < min_bars)
+     {
+      g_escort_ready = false;
+      return false;
+     }
+   if(!ComputeMomentum(g_escort_rates, g_escort_values, g_escort_colors, g_escort_valid))
+     {
+      g_escort_ready = false;
+      return false;
+     }
+   g_escort_last_bar = bar_time;
+   g_escort_ready    = true;
+   return true;
+  }
+
+// Taşınan pozisyon için HTF sinyal sayımı.
+int EvaluateEscortExit(const ulong ticket, string &reason, int &tp_count_out, int &sl_count_out)
+  {
+   reason       = "";
+   tp_count_out = 0;
+   sl_count_out = 0;
+   if(InpEscortTpSignalCount <= 0 && InpEscortSlSignalCount <= 0)
+      return 0;
+   if(!g_escort_ready)
+      return 0;
+   if(!SelectOurPosition(ticket))
+      return 0;
+
+   datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+   return EvaluateExitSeries(ticket, g_escort_rates, g_escort_colors, g_escort_valid,
+                             g_escort_tf, EscortCountFrom(open_time),
+                             InpEscortTpSignalCount, InpEscortSlSignalCount,
+                             reason, tp_count_out, sl_count_out);
+  }
+
+// Taşınan pozisyonları yönetir: seviye güncellemesi + HTF sinyal çıkışları.
+void ProcessEscortPositions()
+  {
+   if(!InpEscortEnabled)
+      return;
+
+   // Kapanmış ticket'ları listeden temizle (liste sınırsız büyümesin).
+   for(int i = ArraySize(g_escort_applied) - 1; i >= 0; i--)
+     {
+      ulong applied = g_escort_applied[i];
+      if(!PositionSelectByTicket(applied))
+         ListRemove(g_escort_applied, applied);
+     }
+
+   int escorted = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !IsEscorted(ticket))
+         continue;
+      escorted++;
+      ApplyEscortExits(ticket);
+     }
+   g_escort_count = escorted;
+   if(escorted <= 0)
+      return;
+
+   // HTF sinyal taraması en fazla 10 saniyede bir yapılır (HTF mumu
+   // değişmediği sürece sonuç aynı kalır, işlemci boşa yorulmaz).
+   datetime now = TimeCurrent();
+   if(g_escort_exit_check > 0 && (now - g_escort_exit_check) < 10)
+      return;
+   g_escort_exit_check = now;
+
+   if(!EnsureEscortData())
+      return;
+
+   ulong tickets[];
+   ArrayResize(tickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !IsEscorted(ticket))
+         continue;
+      int n = ArraySize(tickets);
+      if(ArrayResize(tickets, n + 1) == n + 1)
+         tickets[n] = ticket;
+     }
+
+   for(int i = 0; i < ArraySize(tickets); i++)
+     {
+      string reason = "";
+      int tp_count = 0;
+      int sl_count = 0;
+      int result = EvaluateEscortExit(tickets[i], reason, tp_count, sl_count);
       if(result != 0)
          CloseOurPosition(tickets[i], reason);
      }
+  }
+
+// Para birimi bazlı çıkışlar ve süre sınırları (her tick/timer).
+void CheckPositionMoneyExits()
+  {
+   if(CountOurPositions(0) <= 0)
+      return;
+
+   ulong tickets[];
+   ArrayResize(tickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !SelectOurPosition(ticket))
+         continue;
+      int n = ArraySize(tickets);
+      if(ArrayResize(tickets, n + 1) == n + 1)
+         tickets[n] = ticket;
+     }
+
+   datetime now = TimeCurrent();
+   for(int i = 0; i < ArraySize(tickets); i++)
+     {
+      ulong ticket = tickets[i];
+      if(!SelectOurPosition(ticket))
+         continue;
+
+      datetime open_time   = (datetime)PositionGetInteger(POSITION_TIME);
+      long     seconds_open = (long)(now - open_time);
+      double   profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+      if(IsHarvestPosition(ticket))
+        {
+         if(InpHarvestTakeProfitMoney > 0.0 && profit >= InpHarvestTakeProfitMoney)
+           {
+            CloseOurPosition(ticket, StringFormat("hasat para TP (%.2f >= %.2f)", profit, InpHarvestTakeProfitMoney));
+            continue;
+           }
+         if(InpHarvestStopLossMoney > 0.0 && profit <= -InpHarvestStopLossMoney)
+           {
+            CloseOurPosition(ticket, StringFormat("hasat para SL (%.2f <= -%.2f)", profit, InpHarvestStopLossMoney));
+            continue;
+           }
+         if(InpHarvestMaxLifeMinutes > 0 && seconds_open >= (long)InpHarvestMaxLifeMinutes * 60)
+           {
+            CloseOurPosition(ticket, StringFormat("hasat süre sınırı (%d dk)", InpHarvestMaxLifeMinutes));
+            continue;
+           }
+         continue;
+        }
+
+      if(!IsEscorted(ticket))
+         continue;
+
+      if(InpEscortStopLossMoney > 0.0 && profit <= -InpEscortStopLossMoney)
+        {
+         CloseOurPosition(ticket, StringFormat("taşınan pozisyon para SL (%.2f <= -%.2f)", profit, InpEscortStopLossMoney));
+         continue;
+        }
+      if(InpEscortMaxRideHours > 0 && seconds_open >= (long)InpEscortMaxRideHours * 3600)
+        {
+         CloseOurPosition(ticket, StringFormat("taşınan pozisyon süre sınırı (%d saat)", InpEscortMaxRideHours));
+         continue;
+        }
+     }
+  }
+
+// Bir pozisyonun kapanmış işlemlerinden net sonucu (kâr + swap + komisyon).
+double PositionHistoryProfit(const ulong position_id)
+  {
+   if(!HistorySelectByPosition((long)position_id))
+      return 0.0;
+
+   double total = 0.0;
+   int deals = HistoryDealsTotal();
+   for(int i = 0; i < deals; i++)
+     {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0)
+         continue;
+      total += HistoryDealGetDouble(deal, DEAL_PROFIT);
+      total += HistoryDealGetDouble(deal, DEAL_SWAP);
+      total += HistoryDealGetDouble(deal, DEAL_COMMISSION);
+     }
+   return total;
+  }
+
+// Hasat kâr birikimini günceller: kapanan hasat işlemlerinin net
+// sonucu birikime eklenir, kısmi kâr kredisi buradan beslenir.
+void UpdateHarvestPocket()
+  {
+   if(!InpHarvestEnabled)
+      return;
+
+   // 1) Açık hasat pozisyonlarını izleme listesine al.
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !SelectOurPosition(ticket))
+         continue;
+      if(!IsHarvestPosition(ticket))
+         continue;
+      ListAdd(g_harvest_watch, ticket);
+     }
+
+   // 2) Kapananların net sonucunu birikime ekle.
+   for(int i = ArraySize(g_harvest_watch) - 1; i >= 0; i--)
+     {
+      ulong ticket = g_harvest_watch[i];
+      bool still_open = false;
+      if(PositionSelectByTicket(ticket))
+        {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+            (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            still_open = true;
+        }
+      if(still_open)
+         continue;
+
+      double pnl = PositionHistoryProfit(ticket);
+      g_harvest_pocket += pnl;
+      g_harvest_credit += pnl;
+      if(g_harvest_credit < 0.0)
+         g_harvest_credit = 0.0;
+      g_harvest_closed++;
+      PrintFormat("Hasat kapandı: ticket=%I64u net=%.2f | toplam hasat kârı=%.2f | kısmi kâr kredisi=%.2f",
+                  ticket, pnl, g_harvest_pocket, g_harvest_credit);
+      ListRemove(g_harvest_watch, ticket);
+     }
+  }
+
+// Biriken hasat kârı eşiği aşınca taşınan pozisyondan kısmi kâr alır.
+void CheckHarvestTrim()
+  {
+   if(!InpEscortEnabled || !InpHarvestEnabled || !InpHarvestTrimEnabled)
+      return;
+   if(InpHarvestTrimProfit <= 0.0 || InpHarvestTrimPercent <= 0.0)
+      return;
+   if(g_harvest_credit < InpHarvestTrimProfit)
+      return;
+
+   ulong  ticket      = 0;
+   double best_volume = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || !IsEscorted(t))
+         continue;
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      if(volume > best_volume)
+        {
+         best_volume = volume;
+         ticket      = t;
+        }
+     }
+   if(ticket == 0 || best_volume <= 0.0)
+      return;
+   if(!SelectOurPosition(ticket))
+      return;
+
+   double profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   if(InpHarvestTrimOnlyIfRideProfit && profit < 0.0)
+      return;
+
+   double close_volume = NormalizeVolume(best_volume * InpHarvestTrimPercent / 100.0);
+   if(close_volume <= 0.0)
+      return;
+   double min_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   if(best_volume - close_volume < min_volume - 1.0e-10)
+      close_volume = best_volume; // Kalan hacim minimumun altında kalacaksa tamamı kapatılır
+
+   if(close_volume >= best_volume - 1.0e-10)
+     {
+      if(!CloseOurPosition(ticket, "hasat kârı ile kısmi kâr (tamamı)"))
+         return;
+     }
+   else
+     {
+      bool sent = trade.PositionClosePartial(ticket, close_volume, (ulong)InpDeviationPoints);
+      if(!TradeRetcodeOK(sent))
+        {
+         PrintFormat("Kısmi kâr başarısız: ticket=%I64u hacim=%.8f retcode=%u (%s)",
+                     ticket, close_volume, trade.ResultRetcode(), trade.ResultRetcodeDescription());
+         return;
+        }
+      PrintFormat("Kısmi kâr: ticket=%I64u hacim=%.8f kapatıldı | hasat kredisi %.2f -> %.2f",
+                  ticket, close_volume, g_harvest_credit, g_harvest_credit - InpHarvestTrimProfit);
+      g_last_action = StringFormat("Hasat kârı ile %.8f lot kısmi kâr alındı", close_volume);
+     }
+
+   g_harvest_credit -= InpHarvestTrimProfit;
+   if(g_harvest_credit < 0.0)
+      g_harvest_credit = 0.0;
+   g_harvest_trimmed_lot += close_volume;
+  }
+
+// Her tick/timer'da çalışan taşıma + hasat döngüsü.
+void ManageEscortAndHarvest()
+  {
+   if(!InpEscortEnabled && !InpHarvestEnabled)
+      return;
+   UpdateHarvestPocket();
+   ProcessEscortPositions();
+   CheckPositionMoneyExits();
+   CheckHarvestTrim();
   }
 
 //+------------------------------------------------------------------+
@@ -916,22 +1637,7 @@ void ManageSignalExits(const MqlRates &rates[],
 //+------------------------------------------------------------------+
 bool BuildFixedExits(const int side, const double entry, double &sl, double &tp)
   {
-   sl = 0.0;
-   tp = 0.0;
-   long stops_level  = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   long freeze_level = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
-   double min_distance = MathMax(stops_level, freeze_level) * _Point;
-
-   if(InpFixedTakeProfitPoints > 0)
-     {
-      double distance = MathMax(InpFixedTakeProfitPoints * _Point, min_distance + TickSize());
-      tp = NormalizePriceToTick(entry + side * distance, (side > 0 ? 1 : -1));
-     }
-   if(InpFixedStopLossPoints > 0)
-     {
-      double distance = MathMax(InpFixedStopLossPoints * _Point, min_distance + TickSize());
-      sl = NormalizePriceToTick(entry - side * distance, (side > 0 ? -1 : 1));
-     }
+   BuildFixedPrices(side, entry, InpFixedTakeProfitPoints, InpFixedStopLossPoints, sl, tp);
    return (tp > 0.0 || InpFixedTakeProfitPoints <= 0) &&
           (sl > 0.0 || InpFixedStopLossPoints <= 0);
   }
@@ -962,7 +1668,8 @@ void DrawSignalArrow(const datetime bar_time, const double high, const double lo
   }
 
 bool OpenOneTrade(const int trade_side, const int raw_signal, const datetime signal_bar_time,
-                  const double signal_price, const int index, const int total)
+                  const double signal_price, const int index, const int total,
+                  const bool is_harvest)
   {
    if(InpMaxOpenPositions > 0 && CountOurPositions(0) >= InpMaxOpenPositions)
      {
@@ -981,7 +1688,11 @@ bool OpenOneTrade(const int trade_side, const int raw_signal, const datetime sig
       return false;
      }
 
-   double volume = NormalizeVolume(InpLotSize);
+   // Hasat işlemleri kendi (opsiyonel) lotunu kullanır.
+   double requested_lot = InpLotSize;
+   if(is_harvest && InpHarvestLot > 0.0)
+      requested_lot = InpHarvestLot;
+   double volume = NormalizeVolume(requested_lot);
    if(volume <= 0.0)
      {
       g_last_action = "Lot hacmi broker sınırlarına uymuyor";
@@ -998,6 +1709,8 @@ bool OpenOneTrade(const int trade_side, const int raw_signal, const datetime sig
      }
 
    string comment = (trade_side > 0 ? "SQZLB BUY" : "SQZLB SELL");
+   if(is_harvest)
+      comment = (trade_side > 0 ? "SQZLB HARV BUY" : "SQZLB HARV SELL");
    if(total > 1)
       comment = comment + " " + IntegerToString(index) + "/" + IntegerToString(total);
 
@@ -1016,8 +1729,11 @@ bool OpenOneTrade(const int trade_side, const int raw_signal, const datetime sig
       return false;
      }
 
-   PrintFormat("Giriş: %s | işlem=%s%s | sinyal mumu=%s sinyal fiyatı=%.*f | lot=%.8f",
+   if(is_harvest)
+      g_harvest_opened++;
+   PrintFormat("Giriş: %s | işlem=%s%s%s | sinyal mumu=%s sinyal fiyatı=%.*f | lot=%.8f",
                SignalName(raw_signal), SideName(trade_side),
+               (is_harvest ? " (hasat)" : ""),
                (InpReverseTrading ? " (ters işlem)" : ""),
                TimeToString(signal_bar_time), _Digits, signal_price, volume);
    g_last_action = StringFormat("Yeni %s pozisyon açıldı (%s%s)",
@@ -1053,27 +1769,81 @@ bool OpenPositionBySignal(const int raw_signal, const datetime signal_bar_time, 
       return false;
      }
 
-   // Dengeleme: bu sinyalde kaç pozisyon açılacağı (0 = atla).
-   string note = "";
-   int count = PositionsToOpen(trade_side, note);
-   if(count <= 0)
+   // --- HASAT mı, normal pozisyon mu? ---------------------------------
+   // Taşınan (HTF'ye alınmış) bir pozisyonun TERSİNE açılan hızlı TF
+   // işlemi "hasat" işlemidir: kendi hızlı çıkış kurallarıyla kâr toplar.
+   bool harvest = false;
+   if(InpEscortEnabled && InpHarvestEnabled && EscortSideEnabled(-trade_side) &&
+      CountEscortedPositions(-trade_side) > 0)
+     {
+      if(InpHarvestMaxPositions > 0 &&
+         CountHarvestPositions(trade_side) >= InpHarvestMaxPositions)
+        {
+         g_last_action = StringFormat("Hasat limiti: %d %s hasat pozisyonu açık",
+                                      InpHarvestMaxPositions, SideName(trade_side));
+         PrintFormat("Hasat atlandı (limit %d): %s",
+                     InpHarvestMaxPositions, SignalName(raw_signal));
+         return false;
+        }
+      harvest = true;
+     }
+
+   // Taşınan yönde yeni hızlı TF pozisyonu açılmasın (risk filtresi):
+   // trendin tersine birikmek yerine taşınan pozisyon nefes alsın.
+   if(!harvest && InpEscortEnabled && InpEscortBlockSameSide &&
+      CountEscortedPositions(trade_side) > 0)
      {
       g_balance_skip_count++;
-      PrintFormat("Sinyal atlandı (dengeleme): %s | %s", SignalName(raw_signal), note);
-      g_last_action = StringFormat("%s sinyali atlandı: %s",
-                                   SideName(trade_side), (note == "" ? "fark limiti" : note));
+      g_last_action = StringFormat("%s yönünde taşınan pozisyon var: yeni pozisyon açılmadı",
+                                   SideName(trade_side));
+      PrintFormat("Sinyal atlandı (taşıma filtresi): %s | %s yönünde taşınan pozisyon açık",
+                  SignalName(raw_signal), SideName(trade_side));
       return false;
+     }
+
+   // Dengeleme: bu sinyalde kaç pozisyon açılacağı (0 = atla).
+   // Hasat işlemleri taşınan pozisyonun doğal hedge'i olduğu için
+   // dengeleme farkını bilerek aşabilir; kendi limitleri vardır.
+   string note = "";
+   int count = 1;
+   if(harvest)
+     {
+      note = StringFormat("hasat %d/%s", CountHarvestPositions(trade_side) + 1,
+                          (InpHarvestMaxPositions > 0 ? IntegerToString(InpHarvestMaxPositions) : "sınırsız"));
+      if(InpMaxOpenPositions > 0 && CountOurPositions(0) >= InpMaxOpenPositions)
+        {
+         g_last_action = "Maksimum pozisyon sayısına ulaşıldı (hasat)";
+         return false;
+        }
+     }
+   else
+     {
+      count = PositionsToOpen(trade_side, note);
+      if(count <= 0)
+        {
+         g_balance_skip_count++;
+         PrintFormat("Sinyal atlandı (dengeleme): %s | %s", SignalName(raw_signal), note);
+         g_last_action = StringFormat("%s sinyali atlandı: %s",
+                                      SideName(trade_side), (note == "" ? "fark limiti" : note));
+         return false;
+        }
      }
 
    int opened = 0;
    for(int i = 1; i <= count; i++)
      {
-      if(!OpenOneTrade(trade_side, raw_signal, signal_bar_time, signal_price, i, count))
+      if(!OpenOneTrade(trade_side, raw_signal, signal_bar_time, signal_price, i, count, harvest))
          break;
       opened++;
      }
 
-   if(opened > 0 && count > 1)
+   if(opened > 0 && harvest)
+     {
+      PrintFormat("Hasat: %s | %s pozisyonu açıldı (taşınan pozisyonun tersine)", note,
+                  SideName(trade_side));
+      g_last_action = StringFormat("Hasat pozisyonu açıldı: %s (%s)", SideName(trade_side), note);
+     }
+   else if(opened > 0 && count > 1)
      {
       g_balance_fill_count += (opened - 1);
       PrintFormat("Dengeleme: %s | tek sinyalde %d pozisyon açıldı", note, opened);
@@ -1207,7 +1977,26 @@ void UpdateChartInfo()
       balance_text = StringFormat("maks. fark %d | telafi edilen pozisyon %d | atlanan sinyal %d",
                                   InpBalanceMaxGap, g_balance_fill_count, g_balance_skip_count);
 
-   Comment("Squeeze Momentum [LazyBear] EA v1.31\n",
+   string escort_text;
+   if(!InpEscortEnabled)
+      escort_text = "kapalı";
+   else
+      escort_text = StringFormat("%s | taşıma TF %s | eşik %s | taşınan %d pozisyon | HTF çıkış TP %d / SL %d sinyal",
+                                 EscortModeName(InpEscortMode), EnumToString(g_escort_tf),
+                                 EscortThresholdText(), CountEscortedPositions(0),
+                                 InpEscortTpSignalCount, InpEscortSlSignalCount);
+
+   string harvest_text;
+   if(!InpEscortEnabled || !InpHarvestEnabled)
+      harvest_text = "kapalı";
+   else
+      harvest_text = StringFormat("açık %d | limit %s | para TP %.2f / SL %.2f | toplanan kâr %.2f | kredi %.2f | kısmi kâr %.2f lot",
+                                  CountHarvestPositions(0),
+                                  (InpHarvestMaxPositions > 0 ? IntegerToString(InpHarvestMaxPositions) : "sınırsız"),
+                                  InpHarvestTakeProfitMoney, InpHarvestStopLossMoney,
+                                  g_harvest_pocket, g_harvest_credit, g_harvest_trimmed_lot);
+
+   Comment("Squeeze Momentum [LazyBear] EA v1.40\n",
            "Sembol: ", _Symbol, " | TF: ", EnumToString(g_timeframe), "\n",
            "Sinyal geçişleri: BUY: ", TransitionText(InpBuyFromColor, InpBuyToColor),
            " | SELL: ", TransitionText(InpSellFromColor, InpSellToColor), "\n",
@@ -1225,6 +2014,8 @@ void UpdateChartInfo()
            IntegerToString(CountOurPositions(-1)), "\n",
            "Otomatik sıfırlama: ", reset_text, "\n",
            "Dengeleme: ", balance_text, "\n",
+           "HTF taşıma: ", escort_text, "\n",
+           "Hasat: ", harvest_text, "\n",
            "Durum: ", g_last_action);
   }
 
@@ -1323,6 +2114,65 @@ int OnInit()
       return INIT_FAILED;
      }
 
+   // --- HTF taşıma / hasat ayarlarının doğrulanması ---
+   g_escort_tf = (InpEscortTimeframe == PERIOD_CURRENT
+                  ? (ENUM_TIMEFRAMES)Period() : InpEscortTimeframe);
+   if(InpEscortEnabled)
+     {
+      if(PeriodSeconds(g_escort_tf) <= 0)
+        {
+         Print("EA başlatılamadı: geçersiz taşıma zaman dilimi.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(PeriodSeconds(g_escort_tf) <= PeriodSeconds(g_timeframe))
+        {
+         Print("EA başlatılamadı: taşıma zaman dilimi işlem zaman diliminden BÜYÜK olmalı (örn. M1 -> H1).");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpEscortAfterMinutes < 0 || InpEscortAfterBars < 0 ||
+         InpEscortTpSignalCount < 0 || InpEscortSlSignalCount < 0 ||
+         InpEscortFixedTpPoints < 0 || InpEscortFixedSlPoints < 0 ||
+         InpEscortMaxRideHours < 0 || InpEscortStopLossMoney < 0.0 ||
+         !MathIsValidNumber(InpEscortStopLossMoney))
+        {
+         Print("Hatalı girdiler: taşıma ayarları negatif veya geçersiz olamaz.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpEscortTpSignalCount <= 0 && InpEscortSlSignalCount <= 0 &&
+         InpEscortFixedTpPoints <= 0 && InpEscortFixedSlPoints <= 0 &&
+         InpEscortMaxRideHours <= 0 && InpEscortStopLossMoney <= 0.0)
+         Print("UYARI: taşınan pozisyonun hiçbir çıkış kuralı yok; pozisyon süresiz açık kalabilir.");
+      if(EscortThresholdSeconds() >= PeriodSeconds(g_escort_tf))
+         Print("BİLGİ: taşıma eşiği taşıma zaman diliminden uzun; ilk HTF sinyali beklenirken pozisyon hızlı TF'de kalır.");
+     }
+   if(InpHarvestEnabled)
+     {
+      if(InpHarvestLot < 0.0 || InpHarvestMaxPositions < 0 ||
+         InpHarvestTakeProfitMoney < 0.0 || InpHarvestStopLossMoney < 0.0 ||
+         InpHarvestTpSignalCount < 0 || InpHarvestSlSignalCount < 0 ||
+         InpHarvestMaxLifeMinutes < 0 || InpHarvestTrimProfit < 0.0 ||
+         !MathIsValidNumber(InpHarvestTakeProfitMoney) ||
+         !MathIsValidNumber(InpHarvestStopLossMoney) ||
+         !MathIsValidNumber(InpHarvestLot))
+        {
+         Print("Hatalı girdiler: hasat ayarları negatif veya geçersiz olamaz.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpHarvestTrimPercent < 0.0 || InpHarvestTrimPercent > 100.0 ||
+         !MathIsValidNumber(InpHarvestTrimPercent))
+        {
+         Print("Hatalı girdiler: kısmi kâr yüzdesi 0-100 arasında olmalı.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpHarvestTpSignalCount <= 0 && InpHarvestSlSignalCount <= 0 &&
+         InpHarvestTakeProfitMoney <= 0.0 && InpHarvestStopLossMoney <= 0.0 &&
+         InpHarvestMaxLifeMinutes <= 0)
+         Print("UYARI: hasat pozisyonlarının hiçbir çıkış kuralı yok; hızlı TF sinyalleriyle kapanmazlar.");
+      if(InpEscortEnabled &&
+         AccountInfoInteger(ACCOUNT_MARGIN_MODE) != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+         Print("UYARI: taşıma + hasat aynı sembolde ters yönde pozisyon gerektirir; netting hesapta çalışmaz.");
+     }
+
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpDeviationPoints);
    trade.SetAsyncMode(false);
@@ -1364,6 +2214,38 @@ int OnInit()
                   (InpBalanceMaxBatch > 0 ? IntegerToString(InpBalanceMaxBatch) : "sınırsız"));
    else
       Print("Pozisyon dengeleme: kapalı (her sinyal tek pozisyon açar)");
+   if(InpEscortEnabled)
+     {
+      PrintFormat("HTF taşıma: AÇIK | kapsam=%s | %s -> %s | eşik=%s | HTF çıkış TP=%d / SL=%d sinyal | sabit TP=%d / SL=%d point | maks süre=%s | para SL=%s",
+                  EscortModeName(InpEscortMode), EnumToString(g_timeframe), EnumToString(g_escort_tf),
+                  EscortThresholdText(), InpEscortTpSignalCount, InpEscortSlSignalCount,
+                  InpEscortFixedTpPoints, InpEscortFixedSlPoints,
+                  (InpEscortMaxRideHours > 0 ? StringFormat("%d saat", InpEscortMaxRideHours) : "kapalı"),
+                  (InpEscortStopLossMoney > 0.0 ? StringFormat("%.2f", InpEscortStopLossMoney) : "kapalı"));
+      PrintFormat("Taşıma detayı: sayım başlangıcı=%s | eski sabit seviyeleri temizle=%s | taşınan yönde yeni pozisyon=%s",
+                  (InpEscortAnchor == SQZ_ESCORT_ANCHOR_ENTRY ? "pozisyon açılışı" : "taşıma anı"),
+                  (InpEscortClearOldExits ? "evet" : "hayır"),
+                  (InpEscortBlockSameSide ? "kapalı" : "serbest"));
+     }
+   else
+      Print("HTF taşıma: kapalı (yaşlanan pozisyon hızlı TF kurallarıyla yönetilir)");
+
+   if(InpEscortEnabled && InpHarvestEnabled)
+     {
+      PrintFormat("Hasat: AÇIK | lot=%s | maks pozisyon=%s | para TP=%s / SL=%s | TP sinyal=%d / SL sinyal=%d | süre=%s | kısmi kâr=%s",
+                  (InpHarvestLot > 0.0 ? StringFormat("%.2f", InpHarvestLot) : "normal lot"),
+                  (InpHarvestMaxPositions > 0 ? IntegerToString(InpHarvestMaxPositions) : "sınırsız"),
+                  (InpHarvestTakeProfitMoney > 0.0 ? StringFormat("%.2f", InpHarvestTakeProfitMoney) : "kapalı"),
+                  (InpHarvestStopLossMoney > 0.0 ? StringFormat("%.2f", InpHarvestStopLossMoney) : "kapalı"),
+                  InpHarvestTpSignalCount, InpHarvestSlSignalCount,
+                  (InpHarvestMaxLifeMinutes > 0 ? StringFormat("%d dk", InpHarvestMaxLifeMinutes) : "kapalı"),
+                  (InpHarvestTrimEnabled
+                     ? StringFormat("%.0f%% / %.2f kâr birikimi", InpHarvestTrimPercent, InpHarvestTrimProfit)
+                     : "kapalı"));
+     }
+   else
+      Print("Hasat: kapalı");
+
    Print("Sinyaller yalnızca kapanmış mumlarda değerlendirilir. Açılışta geçmişe dönük sinyal işlenmez.");
    UpdateChartInfo();
    return INIT_SUCCEEDED;
@@ -1381,6 +2263,7 @@ void OnTick()
   {
    CheckAutoReset();
    CheckNewBar();
+   ManageEscortAndHarvest();
    UpdateChartInfo();
   }
 
@@ -1388,6 +2271,7 @@ void OnTimer()
   {
    CheckAutoReset();
    CheckNewBar();
+   ManageEscortAndHarvest();
    UpdateChartInfo();
   }
 
