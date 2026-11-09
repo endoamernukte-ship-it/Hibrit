@@ -1,4 +1,4 @@
-# SqueezeMomentum_LB_EA V1-2 · HTF Taşıma + Hasat (v1.40)
+# SqueezeMomentum_LB_EA V1-2 · HTF Taşıma + Hasat + Donchian Motoru (v1.50)
 
 Bu belge, EA'ya eklenen **"yaşlanan pozisyonu üst zaman dilimine taşıma" (HTF Escort)** ve
 **"ters yönden kâr toplama" (Harvest)** motorunun mantığını, ayarlarını ve risk noktalarını anlatır.
@@ -182,9 +182,100 @@ girişi      → sinyal atlanır (risk filtresi)
 
 ---
 
-## 8. Değişen dosya
+## 8. Donchian Trend Ranges motoru (v1.50) — menüden sinyal seçimi
 
-* `SqueezeMomentum_LB_EA-V1-2.mq5` — sürüm **1.31 → 1.40**
+Pine kodu (`Donchian Trend Ranges [AlgoAlpha]`) MQL5'e **birebir** çevrildi ve EA'ya
+ikinci bir *sinyal motoru* olarak eklendi. `InpSignalEngine` ile seçilir:
+
+| Motor | Açıklama |
+|---|---|
+| `ENGINE_SQUEEZE` | Mevcut davranış: Squeeze Momentum renk geçişleri |
+| `ENGINE_DONCHIAN` | Donchian Trend Ranges olayları (aşağıdaki menüler aktif) |
+
+### 8.1 Açılır menüler (grup 10)
+
+Her satır bir **açılır menü**dür; istediğin olayı seçersin:
+
+| Girdi | Ne yapar |
+|---|---|
+| `InpDonLongEntry` | **LONG giriş sinyali** — örn. `Strong Short TP` seçersen, o olay oluştuğunda LONG açılır |
+| `InpDonShortEntry` | **SHORT giriş sinyali** |
+| `InpDonLongTp` | LONG pozisyonun **TP sinyali** |
+| `InpDonLongSl` | LONG pozisyonun **SL sinyali** |
+| `InpDonShortTp` | SHORT pozisyonun **TP sinyali** |
+| `InpDonShortSl` | SHORT pozisyonun **SL sinyali** |
+| `InpDonTpSignalCount` / `InpDonSlSignalCount` | Kaçıncı sinyalde kapatılsın (1 = ilk sinyal, 0 = kapalı) |
+| `InpDonTpOnlyInProfit` / `InpDonSlOnlyInLoss` | TP sadece kârdayken / SL sadece zarardayken uygulanır |
+
+Seçilebilen olaylar:
+
+| Menü adı | Pine karşılığı | Anlam |
+|---|---|---|
+| Bullish Trend Shift | `crossover(close, fbasis)` | Fiyat basis'i yukarı keser |
+| Bearish Trend Shift | `crossunder(close, fbasis)` | Fiyat basis'i aşağı keser |
+| Strong Long TP | `crossunder(close, uu)` | Fiyat uu'nun altına iner |
+| Weak Long TP | `crossunder(close, ul) and not (close,uu)` | ul altına iner, uu hariç |
+| Strong Short TP | `crossover(close, ll)` | Fiyat ll'nin üstüne çıkar |
+| Weak Short TP | `crossover(close, lu) and not (close,ll)` | lu üstüne çıkar, ll hariç |
+| Squeeze BUY / SELL | Renk geçişleri | Donchian motorunda da seçilebilir |
+
+> Not: Donchian motorunda Squeeze olayları da hesaplanır; yani örneğin girişi
+> "Squeeze BUY", TP'yi "Strong Long TP" olarak karışık kurabilirsin.
+
+### 8.2 Pine matematiği (birebir)
+
+```
+l      = ta.lowest(length)                  // en düşük DÜŞÜK
+u      = ta.highest(length)                 // en yüksek YÜKSEK
+basis  = avg(u, l)
+fbasis := basis == basis[con] ? basis : fbasis[1]      // yapışkan
+dev    = ta.stdev(close, length, false) * mult          // n-1 (unbiased)
+vol    = ta.atr(14)                                     // RMA(TR)
+rangge := fbasis != fbasis[1] ? dev : rangge[1]         // yapışkan
+upper  = fbasis + rangge ; lower = fbasis - rangge
+uu = upper + vol ; ul = upper - vol ; lu = lower + vol ; ll = lower - vol
+```
+
+* Pine'daki **na** davranışı korunur: karşılaştırmalarda na → `false` kabul edilir.
+  Bu yüzden `fbasis` ancak `basis` bir mum boyunca değişmediğinde tanımlı olur ve
+  seviyeler o andan sonra çizilir (grafikte ilk ~70-80 mum boş görünür — Pine'da da öyle).
+* `ta.stdev(..., biased=false)` → n-1 bölmesi kullanılır.
+* `ta.atr` → Wilder RMA; ilk değer ilk `length` TR'nin SMA'sı.
+* Sinyaller yalnızca **kapanmış mumlarda** ve iki barın da seviyeleri geçerliyken üretilir.
+
+### 8.3 Grafikte doğrulama
+
+`DonchianTrendRanges.mq5` göstergesi aynı matematiği çizer:
+
+* Renkli **basis** çizgisi (fiyat üstündeyse yukarı rengi),
+* Üst/alt/basis **bulutları** (DRAW_FILLING), ara bölge noktalı çizgileri,
+* **X** işaretleri: Strong Long/Short TP, **◆**: Weak Long/Short TP,
+* Opsiyonel `Alert()` — Pine `alertcondition` karşılığı.
+
+Göstergeyi aynı grafiğe ekleyip EA'nın ürettiği oklarla karşılaştırabilirsin.
+(Pine'daki `barcolor()` MQL5 göstergesinde doğrudan yapılamaz; yerine basis rengi kullanılır.)
+
+### 8.4 Örnek kurulum (senin tarifin)
+
+```
+InpSignalEngine  = Donchian
+InpDonLongEntry  = Strong Short TP   -> bu olay geldiğinde LONG açılır
+InpDonShortEntry = Strong Long TP    -> bu olay geldiğinde SHORT açılır
+InpDonLongTp     = Weak Long TP      -> long, ilk zayıf long TP sinyalinde kâr alır
+InpDonLongSl     = Bearish Trend Shift
+InpDonTpSignalCount = 1
+InpDonSlSignalCount = 1
+```
+
+Taşıma + hasat motorları bu kurulumda da çalışır: 60 dk sonra taşınan pozisyon H1
+serisinde **aynı seçili olaylarla**, hasat pozisyonları kendi sayılarıyla kapatılır.
+
+---
+
+## 9. Değişen dosya
+
+* `DonchianTrendRanges.mq5` — yeni gösterge (Pine birebir çeviri, sinyal işaretleri + alert)
+* `SqueezeMomentum_LB_EA-V1-2.mq5` — sürüm **1.31 → 1.50**
   * Yeni: `ENUM_SQZ_ESCORT_MODE`, `ENUM_SQZ_ESCORT_ANCHOR`
   * Yeni: grup 8 (HTF taşıma) ve grup 9 (hasat) girdileri
   * Yeni: `EvaluateExitSeries()` (tek çıkış motoru, üç kullanım), `ProcessEscortPositions()`,
@@ -193,3 +284,7 @@ girişi      → sinyal atlanır (risk filtresi)
   * Değişen: `OpenOneTrade()` (hasat lotu + `HARV` etiketi), `OpenPositionBySignal()` (hasat
     ayrımı + taşıma filtresi), `ManageSignalExits()` (taşınanları atlar), `UpdateChartInfo()`
     (yeni panel satırları), `OnInit()` (doğrulama + loglar), `OnTick()/OnTimer()`
+  * v1.50: `ENUM_SQZ_SIGNAL_ENGINE`, `ENUM_SQZ_EVENT`, `ComputeDonchianEvents()`,
+    `SqueezeEventsFromColors()`, `EvaluateEventExit()`, `ManageDonchianExits()`;
+    `ProcessClosedBar()` motor seçimine göre dallanır; HTF taşıma serisi de seçilen motorla
+    hesaplanır (`g_escort_events`)

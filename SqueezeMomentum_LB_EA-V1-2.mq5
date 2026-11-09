@@ -81,13 +81,33 @@
 //|   * Bu motor HEDGING hesap gerektirir (aynı anda ters yönde      |
 //|     pozisyon). Netting hesapta pozisyonlar netleşir.             |
 //|                                                                  |
+//|  SINYAL MOTORU SEÇİMİ (v1.50)                                    |
+//|   * InpSignalEngine ile iki motor arasında geçiş yapılır:        |
+//|       - Squeeze Momentum (renk geçişleri)  [mevcut davranış]     |
+//|       - Donchian Trend Ranges [AlgoAlpha]  [birebir çeviri]      |
+//|   * Donchian motorunda giriş / TP / SL sinyalleri AÇILIR         |
+//|     MENÜLERDEN seçilir. Örnek: LONG giriş sinyalini              |
+//|     "Strong Short TP" yaparsanız, o olay oluştuğunda LONG açılır.|
+//|   * Seçilebilen olaylar: Bullish/Bearish Trend Shift, Strong     |
+//|     Long TP, Weak Long TP, Strong Short TP, Weak Short TP        |
+//|     (+ Squeeze BUY/SELL). Aynı mumda TP ve SL birlikte oluşursa  |
+//|     TP öncelikli olur.                                           |
+//|   * Donchian matematiği Pine ile birebir: ta.lowest/ta.highest   |
+//|     -> basis, fbasis (basis == basis[con] iken güncellenir),     |
+//|     dev = mult * stdev(close, length, biased=false),             |
+//|     vol = ta.atr(14) (RMA), rangge fbasis değişince güncellenir. |
+//|     Pine'daki na davranışı korunur.                              |
+//|   * Taşıma (HTF) ve hasat motorları seçilen motorla birlikte     |
+//|     çalışır: taşınan pozisyonlar HTF serisinde AYNI seçili       |
+//|     olaylarla, hasat pozisyonları kendi sayılarıyla kapatılır.   |
+//|                                                                  |
 //|  NOT: TP/SL sinyal sayımıyla çalıştığı için bunlar sabit fiyat   |
 //|  emri olarak brokera gönderilmez; sayım dolunca EA pozisyonu     |
 //|  piyasadan kapatır. Bu yüzden EA'nın açık kalması gerekir.       |
 //|  Ek güvenlik için sabit TP/SL (point) de tanımlanabilir.         |
 //+------------------------------------------------------------------+
 #property copyright "Squeeze Momentum [LazyBear] - MT5 EA"
-#property version   "1.40"
+#property version   "1.50"
 #property strict
 #property description "Squeeze Momentum [LazyBear] renk geçişi sinyalleriyle işlem açar"
 #property description "HTF taşıma: yaşlanan pozisyon üst zaman diliminde (örn. H1) yönetilir"
@@ -95,6 +115,7 @@
 #property description "Çıkışlar: sinyal sayımı + sabit TP/SL + para bazlı çıkışlar"
 #property description "Otomatik sıfırlama ve long/short dengeleme"
 #property description "Gösterge matematiği LazyBear PineScript ile birebir"
+#property description "Donchian Trend Ranges motoru: giriş/TP/SL sinyalleri menüden seçilir"
 
 #include <Trade/Trade.mqh>
 
@@ -152,6 +173,27 @@ enum ENUM_SQZ_ESCORT_ANCHOR
   {
    SQZ_ESCORT_ANCHOR_SWITCH = 0, // Taşıma anından itibaren say (güvenli)
    SQZ_ESCORT_ANCHOR_ENTRY  = 1  // Pozisyon açılışından itibaren say
+  };
+
+// Sinyal motoru: Squeeze Momentum renk geçişleri veya Donchian Trend Ranges
+enum ENUM_SQZ_SIGNAL_ENGINE
+  {
+   ENGINE_SQUEEZE  = 0, // Squeeze Momentum (renk geçişleri)
+   ENGINE_DONCHIAN = 1  // Donchian Trend Ranges [AlgoAlpha] (birebir)
+  };
+
+// Açılır menülerde seçilebilen olaylar (giriş / TP / SL sinyalleri)
+enum ENUM_SQZ_EVENT
+  {
+   EVENT_NONE             = 0, // (yok / kapalı)
+   EVENT_SQZ_BUY          = 1, // Squeeze BUY renk geçişi
+   EVENT_SQZ_SELL         = 2, // Squeeze SELL renk geçişi
+   EVENT_DON_BULL_SHIFT   = 3, // Bullish Trend Shift (close fbasis'i yukarı keser)
+   EVENT_DON_BEAR_SHIFT   = 4, // Bearish Trend Shift (close fbasis'i aşağı keser)
+   EVENT_DON_STRONG_LONG  = 5, // Strong Long TP (close uu altına iner)
+   EVENT_DON_WEAK_LONG    = 6, // Weak Long TP (close ul altına iner, uu hariç)
+   EVENT_DON_STRONG_SHORT = 7, // Strong Short TP (close ll üstüne çıkar)
+   EVENT_DON_WEAK_SHORT   = 8  // Weak Short TP (close lu üstüne çıkar, ll hariç)
   };
 
 //+------------------------------------------------------------------+
@@ -239,6 +281,23 @@ input double InpHarvestTrimProfit           = 5.0;    // Kısmi kâr için birik
 input double InpHarvestTrimPercent          = 50.0;   // Her tetikte kapatılacak hacim (%)
 input bool   InpHarvestTrimOnlyIfRideProfit = true;   // Kısmi kâr yalnızca taşınan pozisyon kârdayken
 
+input group "10) Donchian Trend Ranges [AlgoAlpha] - birebir Pine çevirisi"
+input ENUM_SQZ_SIGNAL_ENGINE InpSignalEngine  = ENGINE_SQUEEZE; // Sinyal motoru (Squeeze / Donchian)
+input int    InpDonLength    = 50;   // Length (ta.lowest / ta.highest penceresi)
+input double InpDonMult      = 3.0;  // Range Multiplier
+input int    InpDonCon       = 1;    // con (Pine sabiti: basis == basis[con])
+input int    InpDonAtrLength = 14;   // vol = ta.atr(length)
+input ENUM_SQZ_EVENT InpDonLongEntry  = EVENT_DON_STRONG_SHORT; // LONG giriş sinyali (menüden seç)
+input ENUM_SQZ_EVENT InpDonShortEntry = EVENT_DON_STRONG_LONG;  // SHORT giriş sinyali (menüden seç)
+input ENUM_SQZ_EVENT InpDonLongTp     = EVENT_DON_STRONG_LONG;  // LONG TP sinyali (menüden seç)
+input ENUM_SQZ_EVENT InpDonLongSl     = EVENT_DON_BEAR_SHIFT;   // LONG SL sinyali (menüden seç)
+input ENUM_SQZ_EVENT InpDonShortTp    = EVENT_DON_STRONG_SHORT; // SHORT TP sinyali (menüden seç)
+input ENUM_SQZ_EVENT InpDonShortSl    = EVENT_DON_BULL_SHIFT;   // SHORT SL sinyali (menüden seç)
+input int    InpDonTpSignalCount = 1;      // TP için gereken sinyal sayısı (0 = kapalı)
+input int    InpDonSlSignalCount = 1;      // SL için gereken sinyal sayısı (0 = kapalı)
+input bool   InpDonTpOnlyInProfit = false; // TP sinyali yalnızca pozisyon kârdayken uygulanır
+input bool   InpDonSlOnlyInLoss   = false; // SL sinyali yalnızca pozisyon zarardayken uygulanır
+
 //+------------------------------------------------------------------+
 //| Global durum                                                     |
 //+------------------------------------------------------------------+
@@ -279,6 +338,14 @@ double g_harvest_credit       = 0.0; // Kısmi kâr için kullanılabilir biriki
 int    g_harvest_opened       = 0;   // Açılan hasat pozisyonu sayısı
 int    g_harvest_closed       = 0;   // Kapanan hasat pozisyonu sayısı
 double g_harvest_trimmed_lot  = 0.0; // Kısmi kârla kapatılan toplam hacim
+
+// --- Donchian Trend Ranges durumu ---
+int    g_escort_events[];            // HTF mumları için olay bayrakları
+double g_don_fbasis = 0.0;           // Panel: son kapalı mumun fbasis değeri
+double g_don_uu     = 0.0;           // Panel: uu (upper + vol)
+double g_don_ll     = 0.0;           // Panel: ll (lower - vol)
+bool   g_don_ready  = false;         // Panel: Donchian seviyeleri hazır mı?
+int    g_don_last_events = 0;        // Panel: son kapalı mumdaki olay bayrakları
 
 //+------------------------------------------------------------------+
 //| Yardımcılar                                                      |
@@ -1042,6 +1109,409 @@ void ManageSignalExits(const MqlRates &rates[],
   }
 
 //+------------------------------------------------------------------+
+//| Olay (sinyal) yardımcıları                                       |
+//|                                                                  |
+//| Her mum için bir "olay bayrağı" (bit maskesi) hesaplanır. Böylece |
+//| giriş / TP / SL sinyalleri menüden seçilen olaylarla aynı motor   |
+//| üzerinden yönetilir; Squeeze ve Donchian olayları aynı yapıdadır. |
+//+------------------------------------------------------------------+
+int EventBit(const ENUM_SQZ_EVENT ev)
+  {
+   if(ev == EVENT_NONE)
+      return 0;
+   return (1 << ((int)ev - 1));
+  }
+
+bool HasEvent(const int flags, const ENUM_SQZ_EVENT ev)
+  {
+   if(ev == EVENT_NONE)
+      return false;
+   return ((flags & EventBit(ev)) != 0);
+  }
+
+bool IsSqueezeEvent(const ENUM_SQZ_EVENT ev)
+  {
+   return (ev == EVENT_SQZ_BUY || ev == EVENT_SQZ_SELL);
+  }
+
+bool IsDonchianEvent(const ENUM_SQZ_EVENT ev)
+  {
+   return (ev >= EVENT_DON_BULL_SHIFT && ev <= EVENT_DON_WEAK_SHORT);
+  }
+
+string EventName(const ENUM_SQZ_EVENT ev)
+  {
+   switch(ev)
+     {
+      case EVENT_SQZ_BUY:          return "Squeeze BUY";
+      case EVENT_SQZ_SELL:         return "Squeeze SELL";
+      case EVENT_DON_BULL_SHIFT:   return "Bullish Trend Shift";
+      case EVENT_DON_BEAR_SHIFT:   return "Bearish Trend Shift";
+      case EVENT_DON_STRONG_LONG:  return "Strong Long TP";
+      case EVENT_DON_WEAK_LONG:    return "Weak Long TP";
+      case EVENT_DON_STRONG_SHORT: return "Strong Short TP";
+      case EVENT_DON_WEAK_SHORT:   return "Weak Short TP";
+      default:                     return "yok";
+     }
+  }
+
+string EngineName(const ENUM_SQZ_SIGNAL_ENGINE engine)
+  {
+   if(engine == ENGINE_DONCHIAN)
+      return "Donchian Trend Ranges";
+   return "Squeeze Momentum";
+  }
+
+string EventFlagsText(const int flags)
+  {
+   string text = "";
+   if(HasEvent(flags, EVENT_DON_BULL_SHIFT))   text += "BullShift ";
+   if(HasEvent(flags, EVENT_DON_BEAR_SHIFT))   text += "BearShift ";
+   if(HasEvent(flags, EVENT_DON_STRONG_LONG))  text += "StrongLongTP ";
+   if(HasEvent(flags, EVENT_DON_WEAK_LONG))    text += "WeakLongTP ";
+   if(HasEvent(flags, EVENT_DON_STRONG_SHORT)) text += "StrongShortTP ";
+   if(HasEvent(flags, EVENT_DON_WEAK_SHORT))   text += "WeakShortTP ";
+   if(text == "")
+      text = "yok";
+   return text;
+  }
+
+//+------------------------------------------------------------------+
+//| Donchian Trend Ranges [AlgoAlpha] - Pine koduyla BIREBIR          |
+//|                                                                  |
+//|  l        = ta.lowest(length)                                    |
+//|  u        = ta.highest(length)                                   |
+//|  basis    = math.avg(u, l)                                        |
+//|  fbasis  := basis == basis[con] ? basis : fbasis[1]              |
+//|  dev      = ta.stdev(close, length, false) * mult   (n-1 bölme)  |
+//|  vol      = ta.atr(14)                              (RMA)        |
+//|  rangge  := fbasis != fbasis[1] ? dev : rangge[1]                |
+//|  upper = fbasis + rangge , lower = fbasis - rangge               |
+//|  uu = upper + vol , ul = upper - vol , lu = lower + vol ,        |
+//|  ll = lower - vol                                                |
+//|                                                                  |
+//|  Sinyaller (Pine plotchar / alertcondition ile aynı):            |
+//|   Strong Long TP  = crossunder(close, uu)                        |
+//|   Strong Short TP = crossover(close, ll)                         |
+//|   Weak Long TP    = crossunder(close, ul) and not ...(uu)        |
+//|   Weak Short TP   = crossover(close, lu)  and not ...(ll)        |
+//|   Bullish Shift   = crossover(close, fbasis)                     |
+//|   Bearish Shift   = crossunder(close, fbasis)                    |
+//|                                                                  |
+//|  na davranışı Pine ile aynıdır: na içeren karşılaştırma "false"  |
+//|  kabul edilir, bu yüzden seviyeler ancak yeterli veri birikince   |
+//|  (ve fbasis/rangge sabitlenince) geçerli olur.                    |
+//+------------------------------------------------------------------+
+bool ComputeDonchianEvents(const MqlRates &rates[],
+                           int &events[],
+                           double &last_fbasis,
+                           double &last_uu,
+                           double &last_ll,
+                           bool &last_ok)
+  {
+   last_fbasis = 0.0;
+   last_uu     = 0.0;
+   last_ll     = 0.0;
+   last_ok     = false;
+
+   int total = ArraySize(rates);
+   if(total < 3)
+      return false;
+   if(ArrayResize(events, total) < total)
+      return false;
+   for(int i = 0; i < total; i++)
+      events[i] = 0;
+
+   int length  = (int)MathMax(InpDonLength, 2);
+   int atr_len = (int)MathMax(InpDonAtrLength, 1);
+   int con     = (int)MathMax(InpDonCon, 0);
+   if(con > total - 2)
+      con = total - 2;
+
+   double basis[], dev[], tr[], vol[];
+   double fbasis[], rangge[], uu[], ul[], lu[], ll[];
+   bool basis_ok[], dev_ok[], vol_ok[], fbasis_ok[], rangge_ok[], level_ok[];
+
+   if(ArrayResize(basis, total) < total || ArrayResize(basis_ok, total) < total ||
+      ArrayResize(dev, total) < total   || ArrayResize(dev_ok, total) < total ||
+      ArrayResize(tr, total) < total    || ArrayResize(vol, total) < total ||
+      ArrayResize(vol_ok, total) < total ||
+      ArrayResize(fbasis, total) < total || ArrayResize(fbasis_ok, total) < total ||
+      ArrayResize(rangge, total) < total || ArrayResize(rangge_ok, total) < total ||
+      ArrayResize(uu, total) < total || ArrayResize(ul, total) < total ||
+      ArrayResize(lu, total) < total || ArrayResize(ll, total) < total ||
+      ArrayResize(level_ok, total) < total)
+      return false;
+
+   for(int i = 0; i < total; i++)
+     {
+      basis[i] = 0.0;      basis_ok[i]   = false;
+      dev[i] = 0.0;        dev_ok[i]     = false;
+      tr[i] = 0.0;
+      vol[i] = 0.0;        vol_ok[i]     = false;
+      fbasis[i] = 0.0;     fbasis_ok[i]  = false;
+      rangge[i] = 0.0;     rangge_ok[i]  = false;
+      uu[i] = 0.0; ul[i] = 0.0; lu[i] = 0.0; ll[i] = 0.0;
+      level_ok[i] = false;
+     }
+
+   // 1) basis = avg(highest(high, length), lowest(low, length))
+   for(int i = length - 1; i < total; i++)
+     {
+      double hi = rates[i].high;
+      double lo = rates[i].low;
+      for(int j = i - length + 1; j <= i; j++)
+        {
+         hi = MathMax(hi, rates[j].high);
+         lo = MathMin(lo, rates[j].low);
+        }
+      basis[i]    = (hi + lo) * 0.5;
+      basis_ok[i] = true;
+     }
+
+   // 2) dev = mult * ta.stdev(close, length, biased=false)  -> n-1
+   for(int i = length - 1; i < total; i++)
+     {
+      double sum = 0.0;
+      for(int j = i - length + 1; j <= i; j++)
+         sum += rates[j].close;
+      double mean = sum / length;
+      double var  = 0.0;
+      for(int j = i - length + 1; j <= i; j++)
+        {
+         double d = rates[j].close - mean;
+         var += d * d;
+        }
+      var /= (double)(length - 1);
+      dev[i]    = InpDonMult * MathSqrt(var);
+      dev_ok[i] = true;
+     }
+
+   // 3) vol = ta.atr(atr_len) -> RMA(tr, atr_len); ilk değer SMA
+   for(int i = 0; i < total; i++)
+     {
+      double tr_value = rates[i].high - rates[i].low;
+      if(i > 0)
+        {
+         double prev_close = rates[i - 1].close;
+         tr_value = MathMax(tr_value, MathMax(MathAbs(rates[i].high - prev_close),
+                                              MathAbs(rates[i].low  - prev_close)));
+        }
+      tr[i] = tr_value;
+     }
+   for(int i = 0; i < total; i++)
+     {
+      if(i == atr_len - 1)
+        {
+         double sum = 0.0;
+         for(int j = 0; j < atr_len; j++)
+            sum += tr[j];
+         vol[i]    = sum / atr_len;
+         vol_ok[i] = true;
+        }
+      else
+         if(i >= atr_len && vol_ok[i - 1])
+           {
+            vol[i]    = (vol[i - 1] * (atr_len - 1) + tr[i]) / atr_len;
+            vol_ok[i] = true;
+           }
+     }
+
+   // 4) fbasis (yapışkan) ve rangge (yapışkan) - Pine ile birebir
+   double fb_value = 0.0;
+   bool   fb_valid = false;
+   double rg_value = 0.0;
+   bool   rg_valid = false;
+   for(int i = 0; i < total; i++)
+     {
+      // fbasis := basis == basis[con] ? basis : fbasis[1]
+      if(basis_ok[i] && i - con >= 0 && basis_ok[i - con])
+        {
+         if(basis[i] == basis[i - con]) // Pine: tam eşitlik
+           {
+            fb_value = basis[i];
+            fb_valid = true;
+           }
+        }
+      fbasis[i]    = fb_valid ? fb_value : 0.0;
+      fbasis_ok[i] = fb_valid;
+
+      // rangge := fbasis != fbasis[1] ? dev : rangge[1]
+      if(i > 0 && fbasis_ok[i] && fbasis_ok[i - 1] && dev_ok[i] &&
+         fbasis[i] != fbasis[i - 1])
+        {
+         rg_value = dev[i];
+         rg_valid = true;
+        }
+      rangge[i]    = rg_valid ? rg_value : 0.0;
+      rangge_ok[i] = rg_valid;
+     }
+
+   // 5) Seviyeler
+   for(int i = 0; i < total; i++)
+     {
+      if(!fbasis_ok[i] || !rangge_ok[i] || !vol_ok[i])
+         continue;
+      double upper = fbasis[i] + rangge[i];
+      double lower = fbasis[i] - rangge[i];
+      uu[i] = upper + vol[i];
+      ul[i] = upper - vol[i];
+      lu[i] = lower + vol[i];
+      ll[i] = lower - vol[i];
+      level_ok[i] = true;
+     }
+
+   // 6) Olaylar (crossover / crossunder)
+   for(int i = 1; i < total; i++)
+     {
+      if(!level_ok[i] || !level_ok[i - 1])
+         continue;
+
+      double close_now  = rates[i].close;
+      double close_prev = rates[i - 1].close;
+
+      bool cross_under_uu = (close_now <  uu[i] && close_prev >= uu[i - 1]);
+      bool cross_over_ll  = (close_now >  ll[i] && close_prev <= ll[i - 1]);
+      bool cross_under_ul = (close_now <  ul[i] && close_prev >= ul[i - 1]);
+      bool cross_over_lu  = (close_now >  lu[i] && close_prev <= lu[i - 1]);
+      bool cross_over_fb  = (close_now > fbasis[i] && close_prev <= fbasis[i - 1]);
+      bool cross_under_fb = (close_now < fbasis[i] && close_prev >= fbasis[i - 1]);
+
+      int flags = 0;
+      if(cross_under_fb)
+         flags |= EventBit(EVENT_DON_BEAR_SHIFT);
+      if(cross_over_fb)
+         flags |= EventBit(EVENT_DON_BULL_SHIFT);
+      if(cross_under_uu)
+         flags |= EventBit(EVENT_DON_STRONG_LONG);
+      if(cross_over_ll)
+         flags |= EventBit(EVENT_DON_STRONG_SHORT);
+      if(cross_under_ul && !cross_under_uu)
+         flags |= EventBit(EVENT_DON_WEAK_LONG);
+      if(cross_over_lu && !cross_over_ll)
+         flags |= EventBit(EVENT_DON_WEAK_SHORT);
+
+      events[i] = flags;
+     }
+
+   // Panel için son KAPANMIŞ mumun seviyeleri (index total-2)
+   int panel_index = total - 2;
+   if(panel_index >= 0 && level_ok[panel_index])
+     {
+      last_fbasis = fbasis[panel_index];
+      last_uu     = uu[panel_index];
+      last_ll     = ll[panel_index];
+      last_ok     = true;
+     }
+   return true;
+  }
+
+// Squeeze renk geçişlerini de aynı olay maskesine çevirir (panel / ortak kullanım).
+void SqueezeEventsFromColors(const ENUM_SQZ_BAR_COLOR &colors[], int &events[])
+  {
+   int total = ArraySize(colors);
+   if(ArrayResize(events, total) < total)
+      return;
+   for(int i = 0; i < total; i++)
+      events[i] = 0;
+   for(int i = 1; i < total; i++)
+     {
+      int signal = SignalFromTransition(colors[i - 1], colors[i]);
+      if(signal > 0)
+         events[i] = EventBit(EVENT_SQZ_BUY);
+      else
+         if(signal < 0)
+            events[i] = EventBit(EVENT_SQZ_SELL);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Seçilen olaylara göre TP / SL sayımı                             |
+//|                                                                  |
+//| count_from'dan sonra kapanan mumlarda tp_event kaç kez            |
+//| gerçekleştiyse TP, sl_event kaç kez gerçekleştiyse SL sayılır.    |
+//| Aynı mumda iki olay varsa TP önceliklidir.                        |
+//+------------------------------------------------------------------+
+int EvaluateEventExit(const ulong ticket,
+                      const MqlRates &rates[],
+                      const int &events[],
+                      const ENUM_TIMEFRAMES series_tf,
+                      const datetime count_from,
+                      const ENUM_SQZ_EVENT tp_event,
+                      const ENUM_SQZ_EVENT sl_event,
+                      const int tp_needed,
+                      const int sl_needed,
+                      const bool tp_only_in_profit,
+                      const bool sl_only_in_loss,
+                      string &reason,
+                      int &tp_count_out,
+                      int &sl_count_out)
+  {
+   reason       = "";
+   tp_count_out = 0;
+   sl_count_out = 0;
+   if(tp_needed <= 0 && sl_needed <= 0)
+      return 0;
+   if(!SelectOurPosition(ticket))
+      return 0;
+
+   int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+   if(side == 0)
+      return 0;
+   double profit_now = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+   int total       = ArraySize(rates);
+   int event_total = ArraySize(events);
+   int last_closed = total - 2; // Son index oluşan (canlı) mumdur
+   if(last_closed < 1)
+      return 0;
+   if(event_total < total)
+      last_closed = event_total - 2;
+
+   int period_seconds = PeriodSeconds(series_tf);
+   if(period_seconds <= 0)
+      period_seconds = 60;
+
+   for(int i = 1; i <= last_closed; i++)
+     {
+      datetime signal_close_time = rates[i].time + period_seconds;
+      if(signal_close_time <= count_from)
+         continue;
+
+      if(tp_event != EVENT_NONE && HasEvent(events[i], tp_event))
+        {
+         tp_count_out++;
+         if(tp_needed > 0 && tp_count_out >= tp_needed)
+           {
+            if(!tp_only_in_profit || profit_now >= 0.0)
+              {
+               reason = StringFormat("TP (olay sinyali, %s): %d. %s | %s",
+                                     EnumToString(series_tf), tp_count_out,
+                                     EventName(tp_event), TimeToString(rates[i].time));
+               return 1;
+              }
+           }
+        }
+
+      if(sl_event != EVENT_NONE && HasEvent(events[i], sl_event))
+        {
+         sl_count_out++;
+         if(sl_needed > 0 && sl_count_out >= sl_needed)
+           {
+            if(!sl_only_in_loss || profit_now < 0.0)
+              {
+               reason = StringFormat("SL (olay sinyali, %s): %d. %s | %s",
+                                     EnumToString(series_tf), sl_count_out,
+                                     EventName(sl_event), TimeToString(rates[i].time));
+               return -1;
+              }
+           }
+        }
+     }
+   return 0;
+  }
+
+//+------------------------------------------------------------------+
 //| HTF taşıma (escort) + hasat yardımcıları                         |
 //+------------------------------------------------------------------+
 bool ListHas(const ulong &list[], const ulong ticket)
@@ -1327,21 +1797,58 @@ bool EnsureEscortData()
       g_escort_ready = false;
       return false;
      }
-   if(g_escort_ready && bar_time == g_escort_last_bar && ArraySize(g_escort_colors) > 0)
+   bool need_events = (InpSignalEngine == ENGINE_DONCHIAN);
+   if(g_escort_ready && bar_time == g_escort_last_bar &&
+      ArraySize(g_escort_colors) > 0 &&
+      (!need_events || ArraySize(g_escort_events) > 0))
       return true;
 
    int copied = LoadRatesFor(g_escort_tf, g_escort_rates);
    int min_bars = (int)MathMax((2 * InpKCLength) + 5, InpBBLength + 5);
+   if(need_events)
+     {
+      int don_bars = (int)MathMax(InpDonLength + (int)MathMax(InpDonCon, 0) + 5,
+                                  InpDonAtrLength + 5);
+      min_bars = (int)MathMax(min_bars, don_bars);
+     }
    if(copied < min_bars)
      {
       g_escort_ready = false;
       return false;
      }
-   if(!ComputeMomentum(g_escort_rates, g_escort_values, g_escort_colors, g_escort_valid))
+
+   bool momentum_ok = ComputeMomentum(g_escort_rates, g_escort_values,
+                                      g_escort_colors, g_escort_valid);
+   if(need_events)
      {
-      g_escort_ready = false;
-      return false;
+      double fb = 0.0;
+      double uu = 0.0;
+      double ll = 0.0;
+      bool   ok = false;
+      if(!ComputeDonchianEvents(g_escort_rates, g_escort_events, fb, uu, ll, ok))
+        {
+         g_escort_ready = false;
+         return false;
+        }
+      // Squeeze olayları da HTF maskesine eklenir (karışık seçim desteği).
+      if(momentum_ok)
+        {
+         int sqz_flags[];
+         SqueezeEventsFromColors(g_escort_colors, sqz_flags);
+         int sqz_total = ArraySize(sqz_flags);
+         for(int i = 0; i < ArraySize(g_escort_events) && i < sqz_total; i++)
+            g_escort_events[i] |= sqz_flags[i];
+        }
      }
+   else
+     {
+      if(!momentum_ok)
+        {
+         g_escort_ready = false;
+         return false;
+        }
+     }
+
    g_escort_last_bar = bar_time;
    g_escort_ready    = true;
    return true;
@@ -1353,14 +1860,29 @@ int EvaluateEscortExit(const ulong ticket, string &reason, int &tp_count_out, in
    reason       = "";
    tp_count_out = 0;
    sl_count_out = 0;
-   if(InpEscortTpSignalCount <= 0 && InpEscortSlSignalCount <= 0)
-      return 0;
    if(!g_escort_ready)
       return 0;
    if(!SelectOurPosition(ticket))
       return 0;
 
+   int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+   if(side == 0)
+      return 0;
    datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+
+   // Donchian motoru: seçilen olaylar HTF serisinde sayılır.
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      ENUM_SQZ_EVENT tp_event = (side > 0 ? InpDonLongTp : InpDonShortTp);
+      ENUM_SQZ_EVENT sl_event = (side > 0 ? InpDonLongSl : InpDonShortSl);
+      return EvaluateEventExit(ticket, g_escort_rates, g_escort_events, g_escort_tf,
+                               EscortCountFrom(open_time), tp_event, sl_event,
+                               InpEscortTpSignalCount, InpEscortSlSignalCount,
+                               false, false, reason, tp_count_out, sl_count_out);
+     }
+
+   if(InpEscortTpSignalCount <= 0 && InpEscortSlSignalCount <= 0)
+      return 0;
    return EvaluateExitSeries(ticket, g_escort_rates, g_escort_colors, g_escort_valid,
                              g_escort_tf, EscortCountFrom(open_time),
                              InpEscortTpSignalCount, InpEscortSlSignalCount,
@@ -1633,6 +2155,65 @@ void ManageEscortAndHarvest()
   }
 
 //+------------------------------------------------------------------+
+//| Donchian motoru: hızlı TF TP/SL çıkışları                        |
+//|                                                                  |
+//| Her pozisyonun yönüne göre menüden seçilmiş TP ve SL olayları     |
+//| sayılır. Taşınan (HTF) pozisyonlar burada atlanır; onlar          |
+//| EvaluateEscortExit() içinde HTF serisiyle yönetilir.              |
+//+------------------------------------------------------------------+
+void ManageDonchianExits(const MqlRates &rates[], const int &events[])
+  {
+   if(InpDonTpSignalCount <= 0 && InpDonSlSignalCount <= 0 &&
+      InpHarvestTpSignalCount <= 0 && InpHarvestSlSignalCount <= 0)
+      return;
+
+   ulong tickets[];
+   ArrayResize(tickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !SelectOurPosition(ticket))
+         continue;
+      int n = ArraySize(tickets);
+      if(ArrayResize(tickets, n + 1) == n + 1)
+         tickets[n] = ticket;
+     }
+
+   for(int i = 0; i < ArraySize(tickets); i++)
+     {
+      ulong ticket = tickets[i];
+      if(!SelectOurPosition(ticket))
+         continue;
+      if(IsEscorted(ticket))
+         continue; // Taşınan pozisyon HTF kurallarıyla yönetilir
+
+      int side = SideFromPositionType(PositionGetInteger(POSITION_TYPE));
+      if(side == 0)
+         continue;
+
+      bool harvest   = IsHarvestPosition(ticket);
+      int  tp_needed = (harvest ? InpHarvestTpSignalCount : InpDonTpSignalCount);
+      int  sl_needed = (harvest ? InpHarvestSlSignalCount : InpDonSlSignalCount);
+      if(tp_needed <= 0 && sl_needed <= 0)
+         continue;
+
+      ENUM_SQZ_EVENT tp_event = (side > 0 ? InpDonLongTp : InpDonShortTp);
+      ENUM_SQZ_EVENT sl_event = (side > 0 ? InpDonLongSl : InpDonShortSl);
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+
+      string reason = "";
+      int tp_count = 0;
+      int sl_count = 0;
+      int result = EvaluateEventExit(ticket, rates, events, g_timeframe, open_time,
+                                     tp_event, sl_event, tp_needed, sl_needed,
+                                     InpDonTpOnlyInProfit, InpDonSlOnlyInLoss,
+                                     reason, tp_count, sl_count);
+      if(result != 0)
+         CloseOurPosition(ticket, reason);
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| Sinyalde pozisyon açma                                           |
 //+------------------------------------------------------------------+
 bool BuildFixedExits(const int side, const double entry, double &sl, double &tp)
@@ -1861,23 +2442,110 @@ void ProcessClosedBar()
    MqlRates rates[];
    int copied = LoadRates(rates);
    int min_bars = (int)MathMax((2 * InpKCLength) + 5, InpBBLength + 5);
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      int don_bars = (int)MathMax(InpDonLength + (int)MathMax(InpDonCon, 0) + 5,
+                                  InpDonAtrLength + 5);
+      min_bars = (int)MathMax(min_bars, don_bars);
+     }
    if(copied < min_bars)
      {
       g_last_action = StringFormat("Yetersiz mum verisi: %d/%d", copied, min_bars);
       return;
      }
 
+   int last_closed = copied - 2; // Son index oluşan (canlı) mumdur
+   if(last_closed < 1)
+     {
+      g_last_action = "Yeterli kapalı mum yok";
+      return;
+     }
+
    double values[];
    ENUM_SQZ_BAR_COLOR colors[];
    bool valid[];
-   if(!ComputeMomentum(rates, values, colors, valid))
+   bool momentum_ok = ComputeMomentum(rates, values, colors, valid);
+   bool momentum_bar_ok = (momentum_ok &&
+                           ArraySize(valid) > last_closed &&
+                           valid[last_closed] && valid[last_closed - 1]);
+
+   // --- DONCHIAN MOTORU --------------------------------------------
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      int flags[];
+      double don_fbasis = 0.0;
+      double don_uu = 0.0;
+      double don_ll = 0.0;
+      bool   don_ok = false;
+      if(!ComputeDonchianEvents(rates, flags, don_fbasis, don_uu, don_ll, don_ok) ||
+         !don_ok || last_closed >= ArraySize(flags))
+        {
+         g_last_action = "Donchian: yeterli mum verisi yok";
+         return;
+        }
+
+      // Squeeze olayları da aynı maskeye eklenir; menüde Squeeze
+      // olayı seçilirse Donchian motorunda da çalışır.
+      if(momentum_ok)
+        {
+         int sqz_flags[];
+         SqueezeEventsFromColors(colors, sqz_flags);
+         int sqz_total = ArraySize(sqz_flags);
+         for(int i = 0; i < ArraySize(flags) && i < sqz_total; i++)
+            flags[i] |= sqz_flags[i];
+        }
+
+      g_don_fbasis     = don_fbasis;
+      g_don_uu         = don_uu;
+      g_don_ll         = don_ll;
+      g_don_ready      = true;
+      g_don_last_events = flags[last_closed];
+
+      // Squeeze panel değerleri (bilgi amaçlı)
+      if(momentum_bar_ok)
+        {
+         g_last_momentum  = values[last_closed];
+         g_last_bar_color = colors[last_closed];
+         g_prev_bar_color = colors[last_closed - 1];
+         g_last_sqz_state = ComputeSqueezeState(rates, last_closed);
+        }
+
+      // Önce mevcut pozisyonların seçili olay bazlı çıkışları,
+      // ardından aynı mumun yeni giriş sinyali işlenir.
+      ManageDonchianExits(rates, flags);
+
+      int raw = 0;
+      if(HasEvent(flags[last_closed], InpDonLongEntry))
+         raw = 1;
+      else
+         if(HasEvent(flags[last_closed], InpDonShortEntry))
+            raw = -1;
+
+      if(raw == 0)
+        {
+         g_last_action = StringFormat("Donchian: yeni sinyal yok (%s)",
+                                      EventFlagsText(flags[last_closed]));
+         return;
+        }
+
+      g_last_raw_signal   = raw;
+      g_last_signal_time  = rates[last_closed].time;
+      g_last_signal_price = rates[last_closed].close;
+
+      DrawSignalArrow(rates[last_closed].time, rates[last_closed].high,
+                      rates[last_closed].low, raw);
+      OpenPositionBySignal(raw, rates[last_closed].time, rates[last_closed].close);
+      return;
+     }
+
+   // --- SQUEEZE MOTORU (mevcut davranış) ---------------------------
+   if(!momentum_ok)
      {
       g_last_action = "Momentum hesaplanamadı";
       return;
      }
 
-   int last_closed = copied - 2; // Son index oluşan (canlı) mumdur
-   if(last_closed < 1 || !valid[last_closed] || !valid[last_closed - 1])
+   if(!momentum_bar_ok)
      {
       g_last_action = "Momentum için yeterli kapalı mum yok";
       return;
@@ -1977,6 +2645,32 @@ void UpdateChartInfo()
       balance_text = StringFormat("maks. fark %d | telafi edilen pozisyon %d | atlanan sinyal %d",
                                   InpBalanceMaxGap, g_balance_fill_count, g_balance_skip_count);
 
+   // Sinyal motoru bloğu (Squeeze veya Donchian)
+   string engine_text = EngineName(InpSignalEngine);
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+      engine_text = engine_text + StringFormat(" | LONG giriş: %s | SHORT giriş: %s",
+                                               EventName(InpDonLongEntry),
+                                               EventName(InpDonShortEntry));
+
+   string engine_block = StringFormat("Motor: %s\n", engine_text);
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      string donchian_text;
+      if(!g_don_ready)
+         donchian_text = "hesaplanıyor (yeterli mum bekleniyor)";
+      else
+         donchian_text = StringFormat("fbasis=%s | uu=%s | ll=%s | son olaylar: %s | TP: L=%s S=%s (%d) | SL: L=%s S=%s (%d)",
+                                      DoubleToString(g_don_fbasis, _Digits + 2),
+                                      DoubleToString(g_don_uu, _Digits + 2),
+                                      DoubleToString(g_don_ll, _Digits + 2),
+                                      EventFlagsText(g_don_last_events),
+                                      EventName(InpDonLongTp), EventName(InpDonShortTp),
+                                      InpDonTpSignalCount,
+                                      EventName(InpDonLongSl), EventName(InpDonShortSl),
+                                      InpDonSlSignalCount);
+      engine_block = engine_block + StringFormat("Donchian: %s\n", donchian_text);
+     }
+
    string escort_text;
    if(!InpEscortEnabled)
       escort_text = "kapalı";
@@ -1996,8 +2690,9 @@ void UpdateChartInfo()
                                   InpHarvestTakeProfitMoney, InpHarvestStopLossMoney,
                                   g_harvest_pocket, g_harvest_credit, g_harvest_trimmed_lot);
 
-   Comment("Squeeze Momentum [LazyBear] EA v1.40\n",
+   Comment("Squeeze Momentum [LazyBear] + Donchian EA v1.50\n",
            "Sembol: ", _Symbol, " | TF: ", EnumToString(g_timeframe), "\n",
+           engine_block,
            "Sinyal geçişleri: BUY: ", TransitionText(InpBuyFromColor, InpBuyToColor),
            " | SELL: ", TransitionText(InpSellFromColor, InpSellToColor), "\n",
            "Son kapalı mum momentum: ", DoubleToString(g_last_momentum, _Digits + 2), "\n",
@@ -2173,6 +2868,40 @@ int OnInit()
          Print("UYARI: taşıma + hasat aynı sembolde ters yönde pozisyon gerektirir; netting hesapta çalışmaz.");
      }
 
+   // --- Sinyal motoru / Donchian doğrulaması ---
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      if(InpDonLength < 2 || InpDonAtrLength < 1 || InpDonCon < 0 ||
+         InpDonMult <= 0.0 || !MathIsValidNumber(InpDonMult))
+        {
+         Print("Hatalı girdiler: Donchian Length >= 2, ATR Length >= 1, con >= 0, Range Multiplier > 0 olmalı.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpDonTpSignalCount < 0 || InpDonSlSignalCount < 0)
+        {
+         Print("Hatalı girdiler: Donchian TP/SL sinyal sayıları negatif olamaz (0 = o çıkış kapalı).");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(InpDonLongEntry == EVENT_NONE && InpDonShortEntry == EVENT_NONE)
+        {
+         Print("Hatalı girdiler: Donchian motorunda en az bir giriş sinyali (LONG veya SHORT) seçilmeli.");
+         return INIT_PARAMETERS_INCORRECT;
+        }
+      if(IsSqueezeEvent(InpDonLongEntry) || IsSqueezeEvent(InpDonShortEntry) ||
+         IsSqueezeEvent(InpDonLongTp) || IsSqueezeEvent(InpDonLongSl) ||
+         IsSqueezeEvent(InpDonShortTp) || IsSqueezeEvent(InpDonShortSl))
+         Print("BİLGİ: Donchian motorunda Squeeze olayları da menüden seçilebilir; renk geçişleri ayrıca hesaplanır.");
+      if(InpDonLongEntry != EVENT_NONE && InpDonLongEntry == InpDonShortEntry)
+         Print("BİLGİ: LONG ve SHORT giriş sinyali aynı seçilmiş. Aynı mumda iki olay oluşursa LONG önceliklidir.");
+      if(InpDonLongTp != EVENT_NONE && InpDonLongTp == InpDonLongSl)
+         Print("UYARI: LONG TP ve LONG SL sinyali aynı seçilmiş; aynı mumda TP öncelikli olur.");
+      if(InpDonShortTp != EVENT_NONE && InpDonShortTp == InpDonShortSl)
+         Print("UYARI: SHORT TP ve SHORT SL sinyali aynı seçilmiş; aynı mumda TP öncelikli olur.");
+      if(InpDonTpSignalCount <= 0 && InpDonSlSignalCount <= 0 &&
+         InpFixedTakeProfitPoints <= 0 && InpFixedStopLossPoints <= 0)
+         Print("UYARI: Donchian TP/SL sayıları 0 ve sabit TP/SL kapalı; pozisyonlar sinyal sayımıyla kapanmaz.");
+     }
+
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpDeviationPoints);
    trade.SetAsyncMode(false);
@@ -2214,6 +2943,23 @@ int OnInit()
                   (InpBalanceMaxBatch > 0 ? IntegerToString(InpBalanceMaxBatch) : "sınırsız"));
    else
       Print("Pozisyon dengeleme: kapalı (her sinyal tek pozisyon açar)");
+   PrintFormat("Sinyal motoru: %s", EngineName(InpSignalEngine));
+   if(InpSignalEngine == ENGINE_DONCHIAN)
+     {
+      PrintFormat("Donchian Trend Ranges: length=%d mult=%.2f con=%d atr=%d",
+                  InpDonLength, InpDonMult, InpDonCon, InpDonAtrLength);
+      PrintFormat("Donchian eşleme: LONG giriş=%s | SHORT giriş=%s | LONG TP=%s / SL=%s | SHORT TP=%s / SL=%s | TP sayısı=%d | SL sayısı=%d",
+                  EventName(InpDonLongEntry), EventName(InpDonShortEntry),
+                  EventName(InpDonLongTp), EventName(InpDonLongSl),
+                  EventName(InpDonShortTp), EventName(InpDonShortSl),
+                  InpDonTpSignalCount, InpDonSlSignalCount);
+      PrintFormat("Donchian çıkış filtresi: TP yalnızca kârda=%s | SL yalnızca zararda=%s",
+                  (InpDonTpOnlyInProfit ? "evet" : "hayır"),
+                  (InpDonSlOnlyInLoss ? "evet" : "hayır"));
+     }
+   else
+      Print("Donchian motoru: kapalı (Squeeze renk geçişleri kullanılıyor). Donchian menüleri yalnızca motor Donchian iken geçerlidir.");
+
    if(InpEscortEnabled)
      {
       PrintFormat("HTF taşıma: AÇIK | kapsam=%s | %s -> %s | eşik=%s | HTF çıkış TP=%d / SL=%d sinyal | sabit TP=%d / SL=%d point | maks süre=%s | para SL=%s",
