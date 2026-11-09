@@ -243,7 +243,36 @@ uu = upper + vol ; ul = upper - vol ; lu = lower + vol ; ll = lower - vol
 * `ta.atr` → Wilder RMA; ilk değer ilk `length` TR'nin SMA'sı.
 * Sinyaller yalnızca **kapanmış mumlarda** ve iki barın da seviyeleri geçerliyken üretilir.
 
-### 8.3 Grafikte doğrulama
+### 8.3 BAĞIMSIZ ROBOT: `DonchianTrendRanges_EA.mq5`
+
+Bu sistem ayrıca **kendi başına çalışan bir uzman danışman (robot)** olarak da yazıldı:
+
+| Özellik | Açıklama |
+|---|---|
+| Sinyal motoru | Yalnızca Donchian (Pine birebir) |
+| Giriş sinyalleri | `InpLongEntry` / `InpShortEntry` açılır menüleri |
+| TP / SL sinyalleri | `InpLongTp`, `InpLongSl`, `InpShortTp`, `InpShortSl` menüleri |
+| Sayım | TP/SL sinyali N. kez oluşunca kapat (`InpTpSignalCount`, `InpSlSignalCount`) |
+| Filtreler | TP sadece kârda / SL sadece zararda |
+| Emir | Lot, magic, sapma, maks. spread, maks. pozisyon, hedging kontrolü, ters işlem |
+| Güvenlik | Sabit TP/SL (point), para TP/SL, maksimum pozisyon süresi, otomatik sıfırlama |
+| Görsel | Sinyal okları, seviyeleri ve eşlemeyi gösteren panel |
+| Opsiyonel | `InpCloseOppositeOnEntry`: giriş sinyalinde ters pozisyonları kapat |
+
+Örnek (senin tarifin):
+```
+InpLongEntry  = Strong Short TP   -> bu olay geldiğinde LONG açılır
+InpShortEntry = Strong Long TP
+InpLongTp     = Strong Long TP    -> long kâr alır
+InpLongSl     = Bearish Trend Shift
+InpTpSignalCount = 1 / InpSlSignalCount = 1
+```
+
+> Not: Bu robota taşıma (HTF) + hasat motorlarını da istersen ekleyebilirim; şu an
+> o motorlar `SqueezeMomentum_LB_EA-V1-2.mq5` içinde Donchian motoruyla birlikte çalışıyor
+> (aynı menüler orada da var).
+
+### 8.4 Grafikte doğrulama
 
 `DonchianTrendRanges.mq5` göstergesi aynı matematiği çizer:
 
@@ -255,7 +284,7 @@ uu = upper + vol ; ul = upper - vol ; lu = lower + vol ; ll = lower - vol
 Göstergeyi aynı grafiğe ekleyip EA'nın ürettiği oklarla karşılaştırabilirsin.
 (Pine'daki `barcolor()` MQL5 göstergesinde doğrudan yapılamaz; yerine basis rengi kullanılır.)
 
-### 8.4 Örnek kurulum (senin tarifin)
+### 8.5 Örnek kurulum (Squeeze EA içindeki Donchian motoru)
 
 ```
 InpSignalEngine  = Donchian
@@ -274,7 +303,8 @@ serisinde **aynı seçili olaylarla**, hasat pozisyonları kendi sayılarıyla k
 
 ## 9. Değişen dosya
 
-* `DonchianTrendRanges.mq5` — yeni gösterge (Pine birebir çeviri, sinyal işaretleri + alert)
+* `DonchianTrendRanges.mq5` — gösterge (Pine birebir çeviri, sinyal işaretleri + alert)
+* `DonchianTrendRanges_EA.mq5` — BAĞIMSIZ ROBOT (menüden seçilen giriş/TP/SL sinyalleri)
 * `SqueezeMomentum_LB_EA-V1-2.mq5` — sürüm **1.31 → 1.50**
   * Yeni: `ENUM_SQZ_ESCORT_MODE`, `ENUM_SQZ_ESCORT_ANCHOR`
   * Yeni: grup 8 (HTF taşıma) ve grup 9 (hasat) girdileri
